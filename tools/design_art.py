@@ -119,6 +119,35 @@ erase_text(1668, 988, 1760, 1022)
 erase_text(2118, 455, 2290, 492)
 erase_text(NUMBERS[2][0] - 26, NUMBERS[2][1] - 30, NUMBERS[2][0] + 26, NUMBERS[2][1] + 30, thr=80)
 
+# 1f) vis de droite (en haut et en bas) supprimées : structure par inpainting + grain du boîtier repris à côté
+def remove_screw(cx, cy, rad, dx):
+    global out
+    m = np.zeros((DH, DW), np.uint8); cv2.circle(m, (cx, cy), rad, 255, -1)
+    base = cv2.inpaint(np.clip(out, 0, 255).astype(np.uint8), m, 15, cv2.INPAINT_TELEA).astype(np.float32)
+    src_ = out[cy - rad - 8:cy + rad + 8, cx - rad - 8 + dx:cx + rad + 8 + dx]
+    grain = src_ - cv2.GaussianBlur(src_, (0, 0), 3)
+    reg = base[cy - rad - 8:cy + rad + 8, cx - rad - 8:cx + rad + 8] + grain
+    mf = cv2.GaussianBlur(m.astype(np.float32) / 255, (0, 0), 3)[cy - rad - 8:cy + rad + 8, cx - rad - 8:cx + rad + 8][..., None]
+    out[cy - rad - 8:cy + rad + 8, cx - rad - 8:cx + rad + 8] = out[cy - rad - 8:cy + rad + 8, cx - rad - 8:cx + rad + 8] * (1 - mf) + reg * mf
+remove_screw(2366, 177, 40, -95)
+remove_screw(2385, 2407, 38, -110)
+
+# 1g) IN / OUT : effacés puis regravés au centre des jacks (lecture verticale, comme sur le design)
+JACK_Y = 1234
+def erase_label(x0, y0, x1, y1, dy):
+    # texte clair gravé : masque large (lettres + leur liseré), structure par inpainting, grain repris plus haut sur la tranche
+    global out
+    reg = np.clip(out[y0:y1, x0:x1], 0, 255).astype(np.uint8)
+    m = (reg.mean(2) > 75).astype(np.uint8) * 255
+    m = cv2.dilate(m, np.ones((9, 9), np.uint8))
+    base = cv2.inpaint(reg, m, 9, cv2.INPAINT_TELEA).astype(np.float32)
+    src_ = out[y0 + dy:y1 + dy, x0:x1]
+    grain = src_ - cv2.GaussianBlur(src_, (0, 0), 3)
+    mf = cv2.GaussianBlur(m.astype(np.float32) / 255, (0, 0), 2)[..., None]
+    out[y0:y1, x0:x1] = out[y0:y1, x0:x1] * (1 - mf) + (base + grain) * mf
+erase_label(92, 1205, 160, 1345, -170)
+erase_label(2384, 1274, 2442, 1348, 140)
+
 img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 d = ImageDraw.Draw(img)
 INK = (226, 224, 222)
@@ -132,6 +161,15 @@ text(1412, 1001, "LOW", 26, FR, 1.0)
 text(1714, 1005, "HIGH", 26, FR, 1.0)
 text(2203, 473, "ENGAGE", 25, FR, 6.0)
 text(NUMBERS[2][0] + 1, NUMBERS[2][1] + 1, "3", 46, FM)
+def side_label(cx, cy, label, angle, size=50):
+    f = ImageFont.truetype(FM, size)
+    tw = int(f.getlength(label)) + 16; th_ = size + 16
+    lay = Image.new("RGBA", (tw, th_), (0, 0, 0, 0))
+    ImageDraw.Draw(lay).text((tw / 2, th_ / 2), label, font=f, fill=(236, 234, 232, 255), anchor="mm")
+    lay = lay.rotate(angle, expand=True, resample=Image.BICUBIC)
+    img.paste(lay, (round(cx - lay.width / 2), round(cy - lay.height / 2)), lay)
+side_label(128, JACK_Y, "OUT", 90)
+side_label(2412, JACK_Y, "IN", -90)
 
 # ------------------------------------------------------------------ 2) images livrées (2x)
 def to_asset(im): return im.resize((OW, OH), Image.LANCZOS)

@@ -16,7 +16,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHOTS = sys.argv[1]
 OUT = sys.argv[2]
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 TMP = os.path.dirname(os.path.abspath(OUT))
 
 for n, f in (("Pop", "Poppins-Regular"), ("PopL", "Poppins-Light"), ("PopM", "Poppins-Medium"), ("PopB", "Poppins-Bold")):
@@ -29,7 +29,7 @@ src = Image.open(os.path.join(SHOTS, "crycat_100pc_milieu.png")).convert("RGB")
 k = src.height / 928.0
 marks = [  # (numéro, x, y) dans le repère 1020 x 928 du plugin
     (1, 270, 450), (2, 566, 297), (3, 754, 252), (4, 795, 129), (5, 562, 522), (6, 673, 521), (7, 783, 523),
-    (8, 670, 722), (9, 772, 725), (10, 893, 470), (11, 16, 470)]
+    (8, 670, 722), (9, 772, 725), (10, 893, 444), (11, 16, 444)]
 ann = src.copy(); dr = ImageDraw.Draw(ann)
 fnt = ImageFont.truetype(os.path.join(ROOT, "fonts", "Poppins-Bold.ttf"), 22)
 for n, x, y in marks:
@@ -162,7 +162,8 @@ T = {
        ["Q", "2 to 14"], ["Boost", "0 to +15 dB"], ["CPU", "less than 1 % of one core at 48 kHz"]],
  hist=[["1.0.0", "First version: Cry Baby GCB95 model, 6 ranges, Q, Purr, Boost, Auto-engage, live response screen, MIDI learn, calibration, momentary / latching MIDI switches, Program Change presets, double pedal format"],
        ["1.0.1", "Cat emblem on the treadle and cat ears on the name removed: ribbed rubber over the whole treadle"],
-       ["1.1.0", "New user design; treadle tilt with lighting, visible edges, height-dependent shadow and hinge detail; no more stepping with MIDI expression pedals (adaptive ramp + 2-stage glide, 14-bit CC); window 486 x 495"]],
+       ["1.1.0", "New user design; treadle tilt with lighting, visible edges, height-dependent shadow and hinge detail; no more stepping with MIDI expression pedals (adaptive ramp + 2-stage glide, 14-bit CC); window 486 x 495"],
+       ["1.1.1", "Treadle lighting like Wharry (face turns towards / away from the light, sliding reflection, contact shadow when flat), IN / OUT aligned with the jacks, right-hand screws removed, treadle positions precomputed in the background (no freeze)"]],
  ver_h=["Version", "Changes"]),
 "fr": dict(
  lang="FRANÇAIS", sub="Pédale wah à inducteur &nbsp;·&nbsp; VST3 pour Windows et macOS", ver="Notice d'utilisation &nbsp;·&nbsp; version " + VERSION,
@@ -221,7 +222,8 @@ T = {
        ["Q", "de 2 à 14"], ["Boost", "de 0 à +15 dB"], ["Processeur", "moins de 1 % d'un cœur à 48 kHz"]],
  hist=[["1.0.0", "Première version : modèle Cry Baby GCB95, 6 plages, Q, Purr, Boost, enclenchement automatique, écran avec courbe de réponse en direct, MIDI learn, calibration, commutateurs MIDI momentanés / à accrochage, presets par Program Change, format pédale double"],
        ["1.0.1", "Tête de chat du plateau et oreilles de chat sur le nom supprimées : caoutchouc nervuré sur tout le plateau"],
-       ["1.1.0", "Nouveau design de l'utilisateur ; bascule du plateau avec jeu d'ombres et lumières, tranches visibles, ombre selon la hauteur et charnière soignée ; plus aucune saccade avec les pédales d'expression MIDI (rampe adaptative + glissé à 2 étages, CC 14 bits) ; fenêtre 486 x 495"]],
+       ["1.1.0", "Nouveau design de l'utilisateur ; bascule du plateau avec jeu d'ombres et lumières, tranches visibles, ombre selon la hauteur et charnière soignée ; plus aucune saccade avec les pédales d'expression MIDI (rampe adaptative + glissé à 2 étages, CC 14 bits) ; fenêtre 486 x 495"],
+       ["1.1.1", "Éclairage du plateau comme Wharry (la face se tourne vers / s'écarte de la lumière, reflet mobile, ombre de contact à plat), IN / OUT alignés sur les jacks, vis de droite supprimées, positions du plateau précalculées en arrière-plan (anti-gel)"]],
  ver_h=["Version", "Changements"]),
 }
 

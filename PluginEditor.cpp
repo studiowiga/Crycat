@@ -34,7 +34,7 @@ namespace
     // plateau à plat (orteil enfoncé, tel que dans le design) ; il pivote autour de la charnière, côté talon
     constexpr float kPlateL = 65.9f, kPlateR = 473.0f, kPlateTop = 24.9f, kHingeY = 870.4f;
     const Rectangle<float> kPlate (kPlateL, kPlateTop, kPlateR - kPlateL, kHingeY - kPlateTop);
-    constexpr float kRise = 18.0f, kWiden = 1.03f;                          // orteil levé : pointe plus haute et plus large (perspective)
+    constexpr float kRise = 18.0f, kWiden = 1.02f;                          // orteil levé : pointe plus haute et plus large (perspective)
     constexpr float kThick = 7.0f;                                          // épaisseur visible du plateau (tranches)
 
     Image loadPng (const void* d, int n) { return ImageFileFormat::loadFrom (d, (size_t) n).convertedToFormat (Image::ARGB); }
@@ -127,11 +127,32 @@ namespace
         }
 
         // t = 0 : orteil levé (talon enfoncé), t = 1 : orteil enfoncé
+        // Anti-gel : le dessin n'utilise que des positions déjà calculées (la plus proche si besoin) ;
+        // seules les toutes premières positions sont calculées dans paint, le reste par le timer.
         const Image& frame (int i)
         {
             i = jlimit (0, kFrames - 1, i);
-            if (! frames[(size_t) i].isValid()) frames[(size_t) i] = build ((float) i / (float) (kFrames - 1));
+            if (frames[(size_t) i].isValid()) return frames[(size_t) i];
+            for (int d = 1; d < kFrames; ++d)
+            {
+                if (i - d >= 0 && frames[(size_t) (i - d)].isValid()) return frames[(size_t) (i - d)];
+                if (i + d < kFrames && frames[(size_t) (i + d)].isValid()) return frames[(size_t) (i + d)];
+            }
+            frames[(size_t) i] = build ((float) i / (float) (kFrames - 1));
             return frames[(size_t) i];
+        }
+        bool isReady (int i) const { return frames[(size_t) jlimit (0, kFrames - 1, i)].isValid(); }
+
+        // calcule à l'avance une position manquante, en partant de la position actuelle (appelé par le timer)
+        bool buildNextMissing (int around)
+        {
+            if (scale < 0.0f) return false;
+            around = jlimit (0, kFrames - 1, around);
+            for (int d = 0; d < kFrames; ++d)
+                for (int i : { around - d, around + d })
+                    if (i >= 0 && i < kFrames && ! frames[(size_t) i].isValid())
+                    { frames[(size_t) i] = build ((float) i / (float) (kFrames - 1)); return true; }
+            return false;
         }
 
     private:
@@ -142,45 +163,50 @@ namespace
             const int w = src.getWidth(), h = src.getHeight();
             const double sx = (double) w / box.getWidth(), sy = (double) h / box.getHeight();
             auto loc = [&] (double x, double y) { return Point<double> ((x - box.getX()) * sx, (y - box.getY()) * sy); };
-            const double cx = 0.5 * (kPlateL + kPlateR), lift = 1.0 - t;
+            // inclinaison (comme Wharry) : 1 = pointe levée, 0 = plateau à plat (pédale à 80 %), < 0 = pointe enfoncée au-delà du plat
+            const double sTilt = jlimit (-0.25, 1.0, (0.8 - (double) t) / 0.8);
+            const double cx = 0.5 * (kPlateL + kPlateR), lift = jmax (0.0, sTilt);
             const double wid = 1.0 + (kWiden - 1.0) * lift, rise = kRise * lift;
             const Point<double> srcQ[4] = { loc (kPlateL, kPlateTop), loc (kPlateR, kPlateTop), loc (kPlateR, kHingeY), loc (kPlateL, kHingeY) };
             const Point<double> dstQ[4] = { loc (cx - (cx - kPlateL) * wid, kPlateTop - rise), loc (cx + (kPlateR - cx) * wid, kPlateTop - rise),
                                             loc (kPlateR, kHingeY), loc (kPlateL, kHingeY) };
-            if (lift < 1.0e-4) return src.createCopy();
-
             Homography H;
-            if (! H.solve (dstQ, srcQ)) return src.createCopy();
+            const bool warp = lift > 1.0e-4 && H.solve (dstQ, srcQ);
 
             // ---------- 1) face du plateau en perspective ----------
             Image plate (Image::ARGB, w, h, true);
             {
                 const Image::BitmapData bs (src, Image::BitmapData::readOnly);
                 Image::BitmapData bo (plate, Image::BitmapData::writeOnly);
-                const double vTop = srcQ[0].y, vBot = srcQ[3].y;
-                const float dim = (float) (1.0 - 0.13 * lift);                                // la face s'écarte de la lumière
-                const float glint = (float) (70.0 * std::sin (MathConstants<double>::pi * jmin (1.0, lift * 1.15)));
-                const double gc = 0.78 - 0.55 * lift;                                         // le reflet remonte vers la pointe
+                const double topY = dstQ[0].y, botY = dstQ[3].y, span = jmax (1.0, botY - topY);
+                // reflet : bande douce et légèrement oblique (lumière en haut à gauche) qui glisse le long du plateau
+                const double bandC = 0.10 + 0.55 * (double) t;                 // 0 = pointe, 1 = charnière
+                const double bandW = 0.16, bandK = 0.16 + 0.10 * lift;
                 for (int y = 0; y < h; ++y)
+                {
+                    const double gy = jlimit (0.0, 1.0, (botY - (double) y) / span);   // 1 = pointe, 0 = charnière
+                    // diffus : la pointe levée se tourne vers la lumière, enfoncée elle s'en détourne ; creux sombre près de la charnière
+                    const float gain = (float) (1.0 + 0.13 * sTilt * std::pow (gy, 1.3) - 0.07 * lift * std::pow (1.0 - gy, 5.0));
                     for (int x = 0; x < w; ++x)
                     {
-                        const auto q = H.map (x + 0.5, y + 0.5);
-                        const double u = q.x - 0.5, v = q.y - 0.5;
+                        double u = x, v = y;
+                        if (warp) { const auto q = H.map (x + 0.5, y + 0.5); u = q.x - 0.5; v = q.y - 0.5; }
                         if (u < -1.0 || v < -1.0 || u > w || v > h) continue;
                         const PixelARGB p = sample (bs, w, h, (float) u, (float) v);
                         if (p.getAlpha() == 0) continue;
-                        const double vn = (q.y - vTop) / jmax (1.0, vBot - vTop);
-                        const double dg = (vn - gc - 0.18 * ((q.x / w) - 0.5)) / 0.11;               // bande de reflet légèrement oblique
-                        const float band = glint * (float) std::exp (-dg * dg);
+                        const double xr = (double) x / (double) w;
+                        const double bpos = (1.0 - gy) + 0.22 * (xr - 0.5);
+                        const float bnd = (float) (bandK * std::exp (-0.5 * std::pow ((bpos - bandC) / bandW, 2.0)));
                         const float a = (float) p.getAlpha();
                         auto ch = [&] (uint8 c)
                         {
-                            const float lin = (float) c / jmax (1.0f, a);                             // 0..1 non prémultiplié
-                            return u8 (jmin (a, (float) c * dim + band * lin * lin * a / 255.0f));    // le chrome brille, le caoutchouc presque pas
+                            const float v1 = jmin (a, (float) c * gain);
+                            return u8 (v1 + (a - v1) * bnd);                                    // le reflet éclaircit vers le blanc
                         };
                         PixelARGB o; o.setARGB (p.getAlpha(), ch (p.getRed()), ch (p.getGreen()), ch (p.getBlue()));
                         *(PixelARGB*) bo.getPixelPointer (x, y) = o;
                     }
+                }
             }
 
             // ---------- 2) tranches, extrudées depuis la silhouette réelle du plateau (coins arrondis compris) ----------
@@ -295,12 +321,12 @@ namespace
                     {
                         // le point du plateau qui projette ici est plus haut d'environ h (lumière en haut à gauche -> ombre en bas à droite)
                         const double hgt = jlimit (0.0, 1.0, (botY - (double) y) / jmax (1.0, botY - topY)) * lift;
-                        const int xs = (int) std::round (x - 11.0 * sx * hgt), ys = (int) std::round (y - 15.0 * sy * hgt);
+                        const int xs = (int) std::round (x - (2.0 + 9.0 * hgt) * sx), ys = (int) std::round (y - (3.0 + 13.0 * hgt) * sy);
                         if (xs >= 0 && ys >= 0 && xs < w && ys < h)
-                            sh[(size_t) (y * w + x)] = (float) ((const PixelARGB*) bp.getPixelPointer (xs, ys))->getAlpha() / 255.0f * (float) (0.35 + 0.65 * hgt / jmax (1.0e-3, lift));
+                            sh[(size_t) (y * w + x)] = (float) ((const PixelARGB*) bp.getPixelPointer (xs, ys))->getAlpha() / 255.0f;
                     }
             }
-            const int rad = jmax (1, roundToInt ((2.5 + 5.0 * lift) * sx));
+            const int rad = jmax (1, roundToInt ((3.0 + 5.0 * lift) * sx));
             const float norm = 1.0f / (float) (2 * rad + 1);
             for (int pass = 0; pass < 2; ++pass)      // flou boîte séparable, 2 passes (~ gaussien)
             {
@@ -329,7 +355,7 @@ namespace
             {
                 const Image::BitmapData bp (out, Image::BitmapData::readOnly);
                 Image::BitmapData bo (res, Image::BitmapData::writeOnly);
-                const float strength = (float) (0.62 * jmin (1.0, lift * 1.6));
+                const float strength = (float) (0.32 + 0.30 * lift - 0.10 * jmin (0.0, sTilt));
                 for (int y = 0; y < h; ++y)
                     for (int x = 0; x < w; ++x)
                     {
@@ -703,6 +729,16 @@ private:
     {
         if (auto* ed = findParentComponentOfClass<CrycatEditor>()) ed->useSoftwareRenderer();
         proc.pollCalibration();
+        // anti-gel : positions du plateau précalculées au fil des ticks (budget de quelques ms), jamais en masse dans paint
+        if (getWidth() > 0)
+        {
+            treadle.prepare (s * physScale());
+            const int cur = roundToInt (jlimit (0.0f, 1.0f, proc.getPedalShown()) * (float) (kFrames - 1));
+            const double t0 = Time::getMillisecondCounterHiRes();
+            bool built = false;
+            while (Time::getMillisecondCounterHiRes() - t0 < 6.0 && treadle.buildNextMissing (cur)) built = true;
+            if (built) repaint (r (treadle.designBounds()).toNearestInt().expanded (2));
+        }
 
         const int rg = currentRange();
         const bool autoM = param ("auto"), on = proc.isEffectOn(), armed = autoM && param ("active");

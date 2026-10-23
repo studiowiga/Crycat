@@ -16,7 +16,7 @@ int main (int argc, char** argv)
         proc.setParamValue ("pedal", pedal);
         AudioBuffer<float> b (2, 256); MidiBuffer m;
         for (int i = 0; i < 200; ++i) { b.clear(); proc.processBlock (b, m); }
-        for (int i = 0; i < 3; ++i) MessageManager::getInstance()->runDispatchLoopUntil (60);
+        for (int i = 0; i < 40; ++i) MessageManager::getInstance()->runDispatchLoopUntil (50);
         auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
         File f (out + "/" + name + ".png"); f.deleteFile();
         FileOutputStream os (f); PNGImageFormat().writeImageToStream (img, os);
