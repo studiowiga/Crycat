@@ -16,7 +16,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHOTS = sys.argv[1]
 OUT = sys.argv[2]
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 TMP = os.path.dirname(os.path.abspath(OUT))
 
 for n, f in (("Pop", "Poppins-Regular"), ("PopL", "Poppins-Light"), ("PopM", "Poppins-Medium"), ("PopB", "Poppins-Bold")):
@@ -125,7 +125,7 @@ T = {
    ["6", "PURR", "Inductor saturation and input grit (default 20 %)."],
    ["7", "BOOST", "Output gain, 0 to +15 dB (default 0 dB)."],
    ["8", "Footswitch", "Effect ON / OFF, click-free crossfade."],
-   ["9", "LED", "Amber 'cat eye': lit when the wah is active; glows faintly in AUTO while waiting for the pedal to move."],
+   ["9", "LED", "Amber LED: lit when the wah is active; glows faintly in AUTO while waiting for the pedal to move."],
    ["10", "IN", "Input jack (right side)."],
    ["11", "OUT", "Output jack (left side)."]],
  ctl_t="4. Controls in detail",
@@ -160,7 +160,8 @@ T = {
  tech=[["Format", "VST3 (Windows 64-bit, macOS universal), AU also built on macOS"], ["Channels", "Mono or stereo in, mono or stereo out (each channel filtered)"],
        ["Latency", "0 samples"], ["Sweep", "220 Hz to 3.2 kHz depending on the range (GCB95: 450 Hz to 1.6 kHz)"],
        ["Q", "2 to 14"], ["Boost", "0 to +15 dB"], ["CPU", "less than 1 % of one core at 48 kHz"]],
- hist=[["1.0.0", "First version: Cry Baby GCB95 model, 6 ranges, Q, Purr, Boost, Auto-engage, live response screen, MIDI learn, calibration, momentary / latching MIDI switches, Program Change presets, double pedal format"]],
+ hist=[["1.0.0", "First version: Cry Baby GCB95 model, 6 ranges, Q, Purr, Boost, Auto-engage, live response screen, MIDI learn, calibration, momentary / latching MIDI switches, Program Change presets, double pedal format"],
+       ["1.0.1", "Cat emblem on the treadle and cat ears on the name removed: ribbed rubber over the whole treadle"]],
  ver_h=["Version", "Changes"]),
 "fr": dict(
  lang="FRANÇAIS", sub="Pédale wah à inducteur &nbsp;·&nbsp; VST3 pour Windows et macOS", ver="Notice d'utilisation &nbsp;·&nbsp; version " + VERSION,
@@ -182,7 +183,7 @@ T = {
    ["6", "PURR", "Saturation de l'inducteur et grain de l'entrée (20 % par défaut)."],
    ["7", "BOOST", "Gain de sortie, de 0 à +15 dB (0 dB par défaut)."],
    ["8", "Footswitch", "Effet ON / OFF, fondu sans clic."],
-   ["9", "LED", "« Œil de chat » ambre : allumée quand la wah est active ; faible lueur en AUTO tant que la pédale n'a pas bougé."],
+   ["9", "LED", "LED ambre : allumée quand la wah est active ; faible lueur en AUTO tant que la pédale n'a pas bougé."],
    ["10", "IN", "Jack d'entrée (côté droit)."],
    ["11", "OUT", "Jack de sortie (côté gauche)."]],
  ctl_t="4. Les commandes en détail",
@@ -217,7 +218,8 @@ T = {
  tech=[["Format", "VST3 (Windows 64 bits, macOS universel), AU également compilé sur macOS"], ["Canaux", "Entrée mono ou stéréo, sortie mono ou stéréo (chaque canal est filtré)"],
        ["Latence", "0 échantillon"], ["Balayage", "de 220 Hz à 3,2 kHz selon la plage (GCB95 : 450 Hz à 1,6 kHz)"],
        ["Q", "de 2 à 14"], ["Boost", "de 0 à +15 dB"], ["Processeur", "moins de 1 % d'un cœur à 48 kHz"]],
- hist=[["1.0.0", "Première version : modèle Cry Baby GCB95, 6 plages, Q, Purr, Boost, enclenchement automatique, écran avec courbe de réponse en direct, MIDI learn, calibration, commutateurs MIDI momentanés / à accrochage, presets par Program Change, format pédale double"]],
+ hist=[["1.0.0", "Première version : modèle Cry Baby GCB95, 6 plages, Q, Purr, Boost, enclenchement automatique, écran avec courbe de réponse en direct, MIDI learn, calibration, commutateurs MIDI momentanés / à accrochage, presets par Program Change, format pédale double"],
+       ["1.0.1", "Tête de chat du plateau et oreilles de chat sur le nom supprimées : caoutchouc nervuré sur tout le plateau"]],
  ver_h=["Version", "Changements"]),
 }
 

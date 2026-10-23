@@ -198,10 +198,6 @@ T(dI, (TOGGLE[0] + TOGGLE[2]) / 2, TOGGLE[3] + 16, "ENGAGE", FL, 10, spacing=2)
 T(dI, 590, 846, "CRYCAT", FL, 46, anchor="lm", spacing=14)
 T(dI, 592, 884, "VOCAL WAH  ·  6 RANGES  ·  AUTO-ENGAGE", FR, 12.5, anchor="lm", spacing=0.6)
 dI.line((592 * SS, 902 * SS, 930 * SS, 902 * SS), fill=110, width=SS)
-# oreilles de chat au-dessus du premier C (clin d'œil discret, en ambre)
-ex, ey = 595, 833
-for ox in (0, 17):
-    dA.polygon([((ex + ox) * SS, ey * SS), ((ex + ox + 5) * SS, (ey - 11) * SS), ((ex + ox + 11) * SS, ey * SS)], fill=255)
 
 ink = np.asarray(ink_l, np.float32) / 255.0
 ambm = np.asarray(amb_l, np.float32) / 255.0
@@ -309,7 +305,7 @@ frame_col = chrome(n_pl, (0.93, 0.94, 0.98), bands=1.0)
 frame_col += (noise(0.4, 1, 21) * 4)[..., None]
 plate = frame_col.copy()
 
-# caoutchouc : nervures transversales, interrompues par un médaillon à l'orteil
+# caoutchouc : nervures transversales sur toute la surface
 rub = cover(d_rub)
 ry0, ry1 = INT0 + 18, INB - 14
 period = 19.0
@@ -318,43 +314,11 @@ rib = 0.5 - 0.5 * np.cos(2 * math.pi * ph)
 rib = rib ** 0.6 * 4.0
 rib *= np.clip((xx - IN0 - 14) / 6, 0, 1) * np.clip((INR - 14 - xx) / 6, 0, 1)
 rib *= np.clip((yy - ry0) / 4, 0, 1) * np.clip((ry1 - yy) / 4, 0, 1)
-MED = ((L0 + R0) / 2, T0 + 140.0); MED_R = (92.0, 70.0)
-med_d = np.hypot((xx - MED[0]) / MED_R[0], (yy - MED[1]) / MED_R[1]) - 1.0
-rib *= np.clip(med_d * 12, 0, 1)                                # pas de nervures dans le médaillon
 h_rub = bevel(d_rub, 6, 3) + rib + noise(0.5, 0.18, 22)
 
-# médaillon : tête de chat en chrome poli, yeux en émail ambre (fente noire)
-cat_l = Image.new("L", (WW, HH), 0); dc = ImageDraw.Draw(cat_l)
-cx, cy = MED[0], MED[1] + 10
-dc.ellipse(((cx - 46) * SS, (cy - 33) * SS, (cx + 46) * SS, (cy + 37) * SS), fill=255)
-dc.polygon([((cx - 45) * SS, (cy - 4) * SS), ((cx - 40) * SS, (cy - 66) * SS), ((cx - 6) * SS, (cy - 30) * SS)], fill=255)
-dc.polygon([((cx + 45) * SS, (cy - 4) * SS), ((cx + 40) * SS, (cy - 66) * SS), ((cx + 6) * SS, (cy - 30) * SS)], fill=255)
-catm = np.asarray(cat_l, np.float32) / 255.0
-h_cat = np.clip(cv2.GaussianBlur(catm, (0, 0), 4.5 * SS) * 1.25, 0, 1) ** 0.8 * 8.0
-h_cat += cv2.GaussianBlur(catm, (0, 0), 14 * SS) * 6.0     # face légèrement bombée
-eyes_l = Image.new("L", (WW, HH), 0); de = ImageDraw.Draw(eyes_l)
-pup_l = Image.new("L", (WW, HH), 0); dp = ImageDraw.Draw(pup_l)
-for ex in (-19, 19):     # yeux en amande, pupille en fente
-    de.polygon([((cx + ex - 13) * SS, (cy - 1) * SS), ((cx + ex) * SS, (cy - 9) * SS), ((cx + ex + 13) * SS, (cy - 1) * SS), ((cx + ex) * SS, (cy + 7) * SS)], fill=255)
-    dp.ellipse(((cx + ex - 2.2) * SS, (cy - 8) * SS, (cx + ex + 2.2) * SS, (cy + 6) * SS), fill=255)
-eyes = cv2.GaussianBlur(np.asarray(eyes_l, np.float32) / 255.0, (0, 0), 0.6 * SS)
-pup = cv2.GaussianBlur(np.asarray(pup_l, np.float32) / 255.0, (0, 0), 0.5 * SS)
-nose_l = Image.new("L", (WW, HH), 0)
-ImageDraw.Draw(nose_l).polygon([((cx - 5) * SS, (cy + 13) * SS), ((cx + 5) * SS, (cy + 13) * SS), (cx * SS, (cy + 19) * SS)], fill=255)
-nose = cv2.GaussianBlur(np.asarray(nose_l, np.float32) / 255.0, (0, 0), 0.5 * SS)
-h_rub += cv2.GaussianBlur(catm, (0, 0), 1.2 * SS) * 1.5        # le chat est posé sur le caoutchouc
 n_rub = normals(h_rub)
 rub_col = shade(n_rub, np.array([22, 21, 23], np.float32), amb=0.35, diff=0.95, spec=0.10, shin=10)
 rub_col += shade(n_rub, 0, amb=0, diff=0, spec=0.06, shin=60)
-# ombre du chat sur le caoutchouc
-rub_col *= (1 - 0.6 * shadow(catm, 3, 5, 3, 1.0))[..., None]
-cat_cover = cv2.GaussianBlur(catm, (0, 0), 0.4 * SS)
-cat_col = chrome(normals(h_cat), (0.96, 0.95, 0.93), bands=0.8)
-rub_col = over(rub_col, cat_col, cat_cover)
-eye_col = np.array(AMBER, np.float32) * (0.75 + 0.45 * np.clip(1 - (yy - (cy - 8)) / 16, 0, 1))[..., None]
-rub_col = over(rub_col, eye_col, eyes)
-rub_col = over(rub_col, np.array([12, 8, 6], np.float32), pup)
-rub_col = over(rub_col, np.array([40, 34, 34], np.float32), nose)
 plate = over(plate, rub_col, rub)
 # ombre interne du caoutchouc (il est en retrait du cadre)
 inner_sh = np.clip(blur(1 - rub, 3) * rub, 0, 1)

@@ -365,7 +365,7 @@ public:
         // ---- inverseur MAN / AUTO ----
         g.drawImage ((drawnAuto ? tgR : tgL).get (ps), r (kToggle));
 
-        // ---- footswitch + LED (œil de chat ambre) ----
+        // ---- footswitch + LED ambre ----
         {
             auto fr2 = r (kFs);
             if (pressed) fr2 = fr2.withSizeKeepingCentre (fr2.getWidth() * 0.965f, fr2.getHeight() * 0.965f).translated (0, 1.5f * s);
