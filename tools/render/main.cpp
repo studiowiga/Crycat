@@ -29,6 +29,7 @@ int main (int argc, char** argv)
     shot ("crycat_auto_veille", 0.0f, 0, 0.45f, 0.55f, 0.2f, true, true);
     static_cast<CrycatEditor*> (ed.get())->setScaleIndex (2);
     shot ("crycat_100pc_talon", 0.0f, 2, 0.4f, 0.2f, 0.0f, false, true);
+    shot ("crycat_100pc_quart", 0.25f, 2, 0.4f, 0.2f, 0.0f, false, true);
     shot ("crycat_100pc_milieu", 0.55f, 3, 0.55f, 0.3f, 0.2f, false, true);
     shot ("crycat_100pc_pointe", 1.0f, 2, 0.4f, 0.2f, 0.0f, true, true);
     shot ("crycat_100pc_bypass", 0.7f, 5, 0.8f, 0.35f, 0.35f, false, false);

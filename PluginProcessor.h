@@ -84,6 +84,7 @@ private:
     void handleAsyncUpdate() override;
     void handleMidiMessage (const juce::MidiMessage&);
     float mapPedal (float raw01) const;
+    crycat::Settings settingsAt (int offsetInBlock);   // thread audio
 
     crycat::Engine engine;
     double sr = 44100.0;
@@ -96,6 +97,9 @@ private:
     std::atomic<juce::uint32> lastBlockMs { 0 }, calibUntil { 0 };
     std::atomic<int> learnTarget { 0 }, ccPedal { 11 }, ccAuto { -1 }, noteAuto { -1 }, ccFs { -1 }, noteFs { -1 };
     std::atomic<int> calMin { 128 }, calMax { -1 };
+    int pedalMsb = -1, rampSamples = 0;                       // thread audio uniquement
+    juce::int64 sampleClock = 0, lastPedalChange = 0;
+    float lastPedalTarget = -1.0f;
     std::atomic<bool> autoHeld { false }, fsHeld { false }, calibPending { false };
 
     // changements demandés depuis le thread audio (MIDI) et appliqués sur le thread de la fenêtre

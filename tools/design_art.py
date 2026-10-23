@@ -1,418 +1,190 @@
-# CRYCAT : génère tout le visuel du plugin (aucun design source : rendu procédural, lumière en haut à gauche)
-#   background.png   : fond 1020 x 928 (boîtier noir craquelé, panneau de commandes, écran, jacks Studio Wiga)
-#   treadle_down.png : calque du plateau à plat (orteil enfoncé) ; le plugin calcule les autres positions en perspective
+# CRYCAT : prépare les images du plugin à partir du design de l'utilisateur (design/crycat_design_source.png, 2528 x 2576)
+#   repère de dessin du plugin : 911 x 928 (= design x 0.36025) ; les images sont livrées en 2x (1822 x 1856) pour les écrans HiDPI
+#   background.png   : fond nettoyé (écran vidé, repères des boutons, LED, levier et textes corrigés)
+#   treadle_down.png : calque du plateau à plat (orteil enfoncé, tel que dans le design) ; le plugin calcule la bascule
 #   fs_on.png / fs_off.png, toggle_l.png / toggle_r.png : sprites des commandes
-#   tools/layout.txt : coordonnées des commandes (reprises dans PluginEditor.cpp)
-#   design/apercu_treadle_up.png : aperçu orteil levé
+#   tools/layout.txt : coordonnées des commandes dans le repère 911 x 928 (reprises dans PluginEditor.cpp)
 import os, math
 import numpy as np, cv2
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-W, H = 1020, 928
-SS = 2                                    # suréchantillonnage du rendu
-WW, HH = W * SS, H * SS
-rng = np.random.default_rng(7)
-FR = os.path.join(ROOT, "fonts", "Poppins-Regular.ttf"); FL = os.path.join(ROOT, "fonts", "Poppins-Light.ttf")
-FM = os.path.join(ROOT, "fonts", "Poppins-Medium.ttf"); FB = os.path.join(ROOT, "fonts", "Poppins-Bold.ttf")
-INK = (236, 229, 224)
-AMBER = (255, 176, 64)
+src = Image.open(os.path.join(ROOT, "design", "crycat_design_source.png")).convert("RGB")
+A = np.array(src)
+DH, DW = A.shape[:2]
+FH = 928.0
+S = FH / DH                                  # design -> repère du plugin
+FW = round(DW * S)                           # 911
+AS = 2                                       # échelle des images livrées
+OW, OH = FW * AS, int(FH) * AS
+def F(v): return v * S                      # coordonnée design -> repère
+FR = os.path.join(ROOT, "fonts", "Poppins-Regular.ttf"); FM = os.path.join(ROOT, "fonts", "Poppins-Medium.ttf")
 
-yy, xx = np.mgrid[0:HH, 0:WW].astype(np.float32)
-xx = (xx + 0.5) / SS; yy = (yy + 0.5) / SS      # coordonnées dans le repère 1020 x 928
+# ------------------------------------------------------------------ mesures dans le design (pixels du design)
+PLATE = (183, 69, 1313, 2416); PLATE_R = 55                 # plateau à plat (cadre chromé extérieur)
+KNOB = (1570, 824, 153, 113)                                 # RANGE : centre, rayon jupe, rayon chapeau
+SMALL = [(1560, 1450), (1868, 1446), (2174, 1452)]           # Q, PURR, BOOST
+SMALL_R, SMALL_CAP = 113, 83
+CAPS = [(1570, 822), (1564, 1456), (1873, 1455), (2178, 1459)]           # centres des chapeaux (vus un peu en biais)
+POINTERS = [(1570, 822, -24, 113), (1564, 1456, -24, 83), (1873, 1455, -85, 83), (2178, 1459, -134, 83)]
+NUMBERS = [(1398, 953), (1363, 775), (1467, 630), (1641, 628), (1756, 786), (1735, 963)]   # « 1 » à « 6 »
+SCREEN = (1821, 553, 2367, 1181)                             # vitre
+FSW = (1859, 2006); FS_HALF = 150                            # footswitch
+LED = (2144, 2012)
+TOG = (2208, 360)                                            # axe de l'inverseur
 
-LIGHT = np.array([-0.42, -0.58, 0.70], np.float32); LIGHT /= np.linalg.norm(LIGHT)
-HALF = LIGHT + np.array([0, 0, 1], np.float32); HALF /= np.linalg.norm(HALF)
+# ------------------------------------------------------------------ 1) nettoyage
+out = A.copy().astype(np.float32)
+yy, xx = np.mgrid[0:DH, 0:DW].astype(np.float32)
 
-# ------------------------------------------------------------------ outils
-def sd_rrect(x0, y0, x1, y1, r):
-    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    bx, by = (x1 - x0) / 2 - r, (y1 - y0) / 2 - r
-    qx, qy = np.abs(xx - cx) - bx, np.abs(yy - cy) - by
-    return np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - r
+# 1a) repères gravés des boutons : remplacés par la moyenne des pixels voisins sur le même cercle (métal tourné)
+def remove_pointer(cx, cy, adeg, cap):
+    global out
+    x0, x1, y0, y1 = cx - cap, cx + cap, cy - cap, cy + cap
+    sx, sy = xx[y0:y1, x0:x1] - cx, yy[y0:y1, x0:x1] - cy
+    r = np.hypot(sx, sy); th = np.arctan2(sx, -sy)
+    a = math.radians(adeg)
+    hw = np.arctan2(11.0, np.maximum(r, 1)) + 0.03
+    d = np.angle(np.exp(1j * (th - a)))
+    m = (np.abs(d) < hw) & (r > cap * 0.06) & (r < cap * 0.98)
+    mf = cv2.GaussianBlur(m.astype(np.float32), (0, 0), 1.2)
+    mf = np.maximum(mf, m.astype(np.float32))
+    # interpolation entre les deux bords du repère (continuité des reflets du métal tourné)
+    side = []
+    for sgn in (-1, 1):
+        t2 = a + sgn * (hw + 0.03)
+        mx = (cx + r * np.sin(t2)).astype(np.float32); my = (cy - r * np.cos(t2)).astype(np.float32)
+        side.append(cv2.remap(A.astype(np.float32), mx, my, cv2.INTER_LINEAR))
+    t = np.clip((d + hw) / (2 * hw), 0, 1)[..., None]
+    acc = side[0] * (1 - t) + side[1] * t
+    out[y0:y1, x0:x1] = out[y0:y1, x0:x1] * (1 - mf[..., None]) + acc * mf[..., None]
+for p in POINTERS: remove_pointer(*p)
 
-def sd_circle(cx, cy, r): return np.hypot(xx - cx, yy - cy) - r
+# 1b) halo orange (chiffre « 3 » et LED) : retour à la teinte neutre du boîtier
+def neutralise(cx, cy, rad, digit=False):
+    global out
+    x0, x1, y0, y1 = cx - rad, cx + rad, cy - rad, cy + rad
+    reg = out[y0:y1, x0:x1]
+    r = np.hypot(xx[y0:y1, x0:x1] - cx, yy[y0:y1, x0:x1] - cy)
+    w = np.clip((rad - r) / (rad * 0.25), 0, 1)[..., None]
+    base = reg[..., 2:3] * np.array([0.93, 0.92, 1.0], np.float32)       # le canal bleu n'est presque pas touché par l'orange
+    if digit:
+        dm = np.clip((reg[..., 0:1] - 150) / 50, 0, 1)                     # tracé du chiffre : très clair
+        base = base * (1 - dm) + np.array([240, 238, 238], np.float32) * (reg[..., 0:1] / 255.0) * dm
+    out[y0:y1, x0:x1] = reg * (1 - w) + base * w
+neutralise(*NUMBERS[2], 80)
+neutralise(*LED, 115)
+led_m = np.zeros((DH, DW), np.uint8); cv2.circle(led_m, LED, 30, 255, -1)
+out = cv2.inpaint(np.clip(out, 0, 255).astype(np.uint8), led_m, 9, cv2.INPAINT_TELEA).astype(np.float32)
 
-def cover(d, aa=0.6):                           # couverture anti-crénelée (d < 0 à l'intérieur)
-    return np.clip(0.5 - d / aa, 0, 1).astype(np.float32)
+# 1c) inverseur : le levier devient un sprite ; dessous, texture du boîtier recopiée juste au-dessus
+tx0, ty0, tx1, ty1 = TOG[0] - 100, TOG[1] - 62, TOG[0] + 100, TOG[1] + 62
+crop = A[ty0:ty1, tx0:tx1].astype(np.float32)
+lum = crop.mean(2)
+hw_m = (lum > 92).astype(np.uint8)
+hw_m = cv2.morphologyEx(hw_m, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+n, lab, stats, _ = cv2.connectedComponentsWithStats(hw_m)
+keep = np.zeros_like(hw_m)
+big = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+keep[lab == big] = 1                                       # levier + écrou : la plus grande zone claire
+keep = cv2.morphologyEx(keep, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+keep = cv2.dilate(keep, np.ones((5, 5), np.uint8))
+tog_alpha = cv2.GaussianBlur(keep.astype(np.float32), (0, 0), 1.0)
+patch = A[ty0 - 112:ty1 - 112, tx0:tx1].astype(np.float32)          # zone propre au-dessus
+band = np.zeros(keep.shape, bool); band[:14, :] = True                              # bande propre au-dessus de l'inverseur
+patch *= (out[ty0:ty1, tx0:tx1][band].mean(0) / np.maximum(patch[band].mean(0), 1))   # même luminosité que l'entourage
+zone = np.zeros_like(keep); cv2.ellipse(zone, (96, 70), (94, 52), 0, 0, 360, 1, -1)
+zone = np.maximum(zone, cv2.dilate(keep, np.ones((25, 25), np.uint8)))
+fill = cv2.GaussianBlur(zone.astype(np.float32), (0, 0), 5)[..., None]
+out[ty0:ty1, tx0:tx1] = out[ty0:ty1, tx0:tx1] * (1 - fill) + patch * fill
+# ombre douce sous l'écrou (le sprite garde levier + écrou ; l'ombre reste sur le fond)
 
-def bevel(d, width, height, profile="round"):
-    t = np.clip(-d / width, 0, 1)
-    p = np.sqrt(1 - (1 - t) ** 2) if profile == "round" else t * t * (3 - 2 * t)
-    return (p * height).astype(np.float32)
+# 1d) vitre de l'écran vidée (le plugin dessine l'affichage)
+gl = np.zeros((DH, DW), np.uint8)
+x0, y0, x1, y1 = SCREEN
+cv2.rectangle(gl, (x0 + 18, y0), (x1 - 18, y1), 255, -1); cv2.rectangle(gl, (x0, y0 + 18), (x1, y1 - 18), 255, -1)
+for (cx_, cy_) in ((x0 + 18, y0 + 18), (x1 - 18, y0 + 18), (x0 + 18, y1 - 18), (x1 - 18, y1 - 18)): cv2.circle(gl, (cx_, cy_), 18, 255, -1)
+glf = cv2.GaussianBlur(gl.astype(np.float32) / 255, (0, 0), 1.0)[..., None]
+out = out * (1 - glf) + np.array([14, 10, 7], np.float32) * glf
 
-def normals(h):
-    gy, gx = np.gradient(h * SS)                 # h en pixels 1x -> pente
-    n = np.dstack([-gx, -gy, np.ones_like(h)])
-    return n / np.linalg.norm(n, axis=2, keepdims=True)
+# 1e) textes déformés : LOW / HIGH / ENGAGE effacés puis réécrits proprement
+def erase_text(x0, y0, x1, y1, thr=95):
+    global out
+    reg = np.clip(out[y0:y1, x0:x1], 0, 255).astype(np.uint8)
+    m = (reg.mean(2) > thr).astype(np.uint8) * 255
+    m = cv2.dilate(m, np.ones((5, 5), np.uint8))
+    out[y0:y1, x0:x1] = cv2.inpaint(reg, m, 5, cv2.INPAINT_TELEA).astype(np.float32)
+erase_text(1370, 985, 1456, 1018)
+erase_text(1668, 988, 1760, 1022)
+erase_text(2118, 455, 2290, 492)
+erase_text(NUMBERS[2][0] - 26, NUMBERS[2][1] - 30, NUMBERS[2][0] + 26, NUMBERS[2][1] + 30, thr=80)
 
-def shade(n, albedo, amb=0.22, diff=0.85, spec=0.25, shin=30.0, spec_col=(1, 1, 1)):
-    ndl = np.clip(n @ LIGHT, 0, 1)[..., None]
-    ndh = np.clip(n @ HALF, 0, 1)[..., None]
-    a = np.asarray(albedo, np.float32)
-    return a * (amb + diff * ndl) + 255.0 * spec * ndh ** shin * np.asarray(spec_col, np.float32)
-
-def chrome(n, tint=(1.0, 1.0, 1.0), bands=1.0, pos_wave=True):
-    # chrome poli : environnement de studio (ciel clair en haut, horizon sombre, sol gris), lu par le vecteur réfléchi
-    nz = n[..., 2]
-    rx, ry, rz = 2 * nz * n[..., 0], 2 * nz * n[..., 1], 2 * nz * nz - 1
-    t = ry / np.maximum(np.hypot(ry, rz), 1e-4)  # -1 : vers le haut, +1 : vers le bas
-    env = np.interp(t, [-1.0, -0.55, -0.15, 0.05, 0.18, 0.5, 1.0], [250, 236, 205, 70, 115, 150, 105]).astype(np.float32)
-    if pos_wave:
-        # grands reflets diagonaux qui varient sur la surface (évite un aplat sur les faces planes)
-        env += bands * (34 * np.sin((xx * 0.9 + yy * 0.55) / 70.0) + 18 * np.sin((xx * 0.4 - yy) / 31.0))
-    env += 0.35 * (rx * -60)
-    col = np.clip(env, 0, 255)[..., None] * np.asarray(tint, np.float32)[None, None, :]
-    spec = np.clip(n @ HALF, 0, 1) ** 60 * 255
-    return col + spec[..., None]
-
-def blur(a, s): return cv2.GaussianBlur(a, (0, 0), s * SS)
-
-def noise(sigma, amp=1.0, seed=None):
-    r = np.random.default_rng(seed) if seed is not None else rng
-    nz = r.standard_normal((HH, WW)).astype(np.float32)
-    nz = cv2.GaussianBlur(nz, (0, 0), sigma * SS)
-    return nz / (nz.std() + 1e-6) * amp
-
-def over(base, col, alpha):
-    a = np.clip(alpha, 0, 1)[..., None]
-    return base * (1 - a) + col * a
-
-def shadow(mask, dx, dy, s, strength):
-    m = np.roll(np.roll(mask, int(dy * SS), 0), int(dx * SS), 1)
-    return np.clip(blur(m, s) * strength, 0, 1)
-
-def to_img(arr): return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
-
-def down(im): return im.resize((W, H), Image.LANCZOS)
-
-# ------------------------------------------------------------------ géométrie (repère 1020 x 928)
-BODY = (34, 12, 986, 916, 46)
-PLATE = (84.0, 35.0, 528.0, 880.0)          # plateau à plat : gauche, haut, droite, charnière
-PANEL_X0 = 556
-KNOB = (633.0, 300.0); KNOB_R, KNOB_CAP = 60.0, 44.0           # sélecteur RANGE (6 crans)
-SMALL = [(632.0, 528.0), (752.0, 528.0), (872.0, 528.0)]        # Q, PURR, BOOST
-SMALL_R, SMALL_CAP = 42.0, 32.0
-SCREEN = (744.0, 186.0, 948.0, 418.0)                           # vitre (zone dessinée par le plugin)
-FS = (681.0, 668.0, 819.0, 806.0)                               # footswitch (carré du sprite)
-FS_LED = (857.0, 737.0)
-TOGGLE = (858.0, 92.0, 922.0, 140.0)                             # inverseur MAN / AUTO
-JACK_Y = 470.0
-
-# ------------------------------------------------------------------ 1) fond (béton sombre)
-bgn = noise(1.2, 9, 1) + noise(6, 7, 2) + noise(40, 10, 3)
-vign = 1.0 - 0.45 * np.clip(np.hypot((xx - W / 2) / (W * 0.62), (yy - H / 2) / (H * 0.62)), 0, 1.4) ** 2
-img = np.dstack([(46 + bgn) * vign, (47 + bgn) * vign, (50 + bgn) * vign]).astype(np.float32)
-
-# ombre portée du boîtier
-d_body = sd_rrect(*BODY)
-body_m = cover(d_body)
-img *= (1 - 0.75 * shadow(body_m, 10, 16, 14, 1.0))[..., None]
-
-# ------------------------------------------------------------------ 2) boîtier : fonte peinte en noir craquelé
-crk1 = noise(0.9, 1.0, 11); crk2 = noise(2.2, 1.0, 12)
-crinkle = (1 - np.abs(crk1)) * 0.55 + (1 - np.abs(crk2)) * 0.45        # rides du craquelé
-h_body = bevel(d_body, 16, 14) + crinkle * 0.55 + noise(25, 0.6, 13)
-# filet gravé qui entoure le panneau de commandes
-d_panel = sd_rrect(PANEL_X0, 34, 962, 894, 26)
-groove = np.exp(-(d_panel / 1.4) ** 2)
-h_body -= groove * 1.6
-n_body = normals(h_body)
-albedo_body = np.array([27, 25, 30], np.float32) * (1 + 0.08 * noise(60, 1, 14))[..., None]
-body_col = shade(n_body, albedo_body, amb=0.30, diff=0.9, spec=0.16, shin=14, spec_col=(0.95, 0.92, 1.0))
-body_col += shade(n_body, 0, amb=0, diff=0, spec=0.10, shin=80)              # vernis
-# arête supérieure du biseau qui accroche la lumière
-edge = np.exp(-((d_body + 2.5) / 1.6) ** 2) * np.clip(-(xx - W / 2) / W - (yy - H / 2) / H + 0.6, 0, 1.2)
-body_col += (edge * 70)[..., None]
-img = over(img, body_col, body_m)
-
-# ------------------------------------------------------------------ 3) logement du plateau (creux sombre) + charnière
-L0, T0, R0, B0 = PLATE
-d_well = sd_rrect(L0 - 10, T0 - 6, R0 + 10, B0 + 18, 34)
-well = cover(d_well)
-img = over(img, img * 0.35, well * 0.9)
-img *= (1 - 0.6 * blur(well, 5) * (1 - cover(d_well + 10)))[..., None] ** 0.5
-# charnière chromée (axe visible sous le talon)
-hx0, hx1, hy = L0 + 40, R0 - 40, B0 + 6
-d_h = np.maximum(np.abs(yy - hy) - 9, np.maximum(hx0 - xx, xx - hx1))
-hm = cover(d_h)
-cyl = np.clip((yy - hy) / 9.0, -1, 1)
-n_h = np.dstack([np.zeros_like(cyl), cyl, np.sqrt(np.clip(1 - cyl ** 2, 0, 1))])
-img = over(img, chrome(n_h, (0.95, 0.95, 1.0), pos_wave=False) * 0.9, hm)
-
-# ------------------------------------------------------------------ 4) panneau : écran, boutons, textes
-canvas = img.copy()
-
-# sérigraphie (dessinée sur un calque PIL suréchantillonné)
-def text_layer():
-    return Image.new("L", (WW, HH), 0)
-
-def F(path, size): return ImageFont.truetype(path, round(size * SS))
-
-ink_l = text_layer(); dI = ImageDraw.Draw(ink_l)
-amb_l = text_layer(); dA = ImageDraw.Draw(amb_l)
-
-def T(d, x, y, s, font, size, anchor="mm", spacing=0.0):
-    f = F(font, size)
-    if not spacing:
-        d.text((x * SS, y * SS), s, font=f, fill=255, anchor=anchor); return
-    total = sum(f.getlength(ch) for ch in s) + spacing * SS * (len(s) - 1)
-    cx = x * SS - (total / 2 if anchor[0] == "m" else 0)
+img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+d = ImageDraw.Draw(img)
+INK = (226, 224, 222)
+def text(x, y, s, size, font=FR, spacing=0.0):
+    f = ImageFont.truetype(font, size)
+    total = sum(f.getlength(ch) for ch in s) + spacing * (len(s) - 1)
+    cx = x - total / 2
     for ch in s:
-        d.text((cx, y * SS), ch, font=f, fill=255, anchor="l" + anchor[1]); cx += f.getlength(ch) + spacing * SS
+        d.text((cx, y), ch, font=f, fill=INK, anchor="lm"); cx += f.getlength(ch) + spacing
+text(1412, 1001, "LOW", 26, FR, 1.0)
+text(1714, 1005, "HIGH", 26, FR, 1.0)
+text(2203, 473, "ENGAGE", 25, FR, 6.0)
+text(NUMBERS[2][0] + 1, NUMBERS[2][1] + 1, "3", 46, FM)
 
-# filets de séparation
-for (y, x0, x1) in ((452, 586, 932), (628, 586, 932)):
-    dI.line((x0 * SS, y * SS, x1 * SS, y * SS), fill=150, width=SS)
-dI.line((586 * SS, 70 * SS, 838 * SS, 70 * SS), fill=150, width=SS)
+# ------------------------------------------------------------------ 2) images livrées (2x)
+def to_asset(im): return im.resize((OW, OH), Image.LANCZOS)
+plate_src = img.copy()                       # le plateau garde le design d'origine
+# sous le plateau : logement sombre du boîtier (visible quand la pointe se lève ; le plateau du calque le recouvre à plat)
+wm = Image.new("L", (DW, DH), 0)
+ImageDraw.Draw(wm).rounded_rectangle((PLATE[0] - 2, PLATE[1] - 2, PLATE[2] + 2, PLATE[3] + 1), PLATE_R + 2, fill=255)
+wm = np.asarray(wm.filter(ImageFilter.GaussianBlur(1.5)), np.float32)[..., None] / 255.0
+wy = (yy - PLATE[1]) / (PLATE[3] - PLATE[1])
+well = np.dstack([np.full((DH, DW), 15.0), np.full((DH, DW), 14.0), np.full((DH, DW), 17.0)]) * (0.75 + 0.5 * np.clip(wy, 0, 1))[..., None]
+well += np.random.default_rng(3).normal(0, 2.0, (DH, DW, 1))
+bgarr = np.asarray(img, np.float32) * (1 - wm) + well * wm
+img = Image.fromarray(np.clip(bgarr, 0, 255).astype(np.uint8))
+background = to_asset(img)
+background.save(os.path.join(ROOT, "background.png"), optimize=True)
 
-# graduations du sélecteur RANGE : 6 crans sur 250°
-RANGE_A0, RANGE_SPAN = -125.0, 250.0
-for i in range(6):
-    a = math.radians(RANGE_A0 + RANGE_SPAN * i / 5)
-    sx, sy = math.sin(a), -math.cos(a)
-    r0, r1 = KNOB_R + 6, KNOB_R + 15
-    dI.line(((KNOB[0] + sx * r0) * SS, (KNOB[1] + sy * r0) * SS, (KNOB[0] + sx * r1) * SS, (KNOB[1] + sy * r1) * SS), fill=255, width=round(2.2 * SS))
-    rt = KNOB_R + 24
-    T(dI, KNOB[0] + sx * rt, KNOB[1] + sy * rt, str(i + 1), FM, 17)
-T(dI, KNOB[0], KNOB[1] + KNOB_R + 34, "RANGE", FR, 15, spacing=3)
-# petits arcs « bass » / « bright »
-T(dI, KNOB[0] - 62, KNOB[1] + KNOB_R + 4, "LOW", FL, 11)
-T(dI, KNOB[0] + 62, KNOB[1] + KNOB_R + 4, "HIGH", FL, 11)
+# plateau à plat : cadre arrondi détouré dans le design d'origine
+pm = Image.new("L", (DW, DH), 0)
+ImageDraw.Draw(pm).rounded_rectangle(PLATE, PLATE_R, fill=255)
+pm = pm.filter(ImageFilter.GaussianBlur(1.2))
+plate = plate_src.convert("RGBA"); plate.putalpha(pm)
+to_asset(plate).save(os.path.join(ROOT, "treadle_down.png"), optimize=True)
 
-# graduations des petits boutons (11 traits sur 270°)
-for (cx, cy), name in zip(SMALL, ("Q", "PURR", "BOOST")):
-    for k in range(11):
-        a = math.radians(-135 + 27 * k)
-        sx, sy = math.sin(a), -math.cos(a)
-        r0, r1 = SMALL_R + 4, SMALL_R + (12 if k in (0, 5, 10) else 8)
-        dI.line(((cx + sx * r0) * SS, (cy + sy * r0) * SS, (cx + sx * r1) * SS, (cy + sy * r1) * SS), fill=230, width=round(1.6 * SS))
-    T(dI, cx, cy + SMALL_R + 30, name, FR, 16, spacing=1.5)
-
-# inverseur MAN / AUTO
-T(dI, TOGGLE[0] - 8, (TOGGLE[1] + TOGGLE[3]) / 2, "MAN", FR, 12, anchor="rm")
-T(dI, TOGGLE[2] + 8, (TOGGLE[1] + TOGGLE[3]) / 2, "AUTO", FR, 12, anchor="lm")
-T(dI, (TOGGLE[0] + TOGGLE[2]) / 2, TOGGLE[3] + 16, "ENGAGE", FL, 10, spacing=2)
-
-# nom + sous-titre
-T(dI, 590, 846, "CRYCAT", FL, 46, anchor="lm", spacing=14)
-T(dI, 592, 884, "VOCAL WAH  ·  6 RANGES  ·  AUTO-ENGAGE", FR, 12.5, anchor="lm", spacing=0.6)
-dI.line((592 * SS, 902 * SS, 930 * SS, 902 * SS), fill=110, width=SS)
-
-ink = np.asarray(ink_l, np.float32) / 255.0
-ambm = np.asarray(amb_l, np.float32) / 255.0
-canvas = over(canvas, np.array(INK, np.float32), ink * 0.93)
-canvas = over(canvas, np.array(AMBER, np.float32), ambm * 0.95)
-
-# logo Studio Wiga (kit)
-logo = Image.open(os.path.join(ROOT, "logo_studio_wiga_blanc.png")).convert("RGBA")
-lw = round(150 * SS); logo = logo.resize((lw, round(lw * logo.height / logo.width)), Image.LANCZOS)
-la = np.zeros((HH, WW), np.float32)
-lx, ly = round(586 * SS), round(52 * SS - logo.height / 2)
-la[ly:ly + logo.height, lx:lx + logo.width] = np.asarray(logo)[..., 3] / 255.0
-canvas = over(canvas, np.array(INK, np.float32), la * 0.95)
-
-# ---- écran : cadre noir en creux + vitre ----
-sx0, sy0, sx1, sy1 = SCREEN
-d_bz = sd_rrect(sx0 - 11, sy0 - 11, sx1 + 11, sy1 + 11, 16)
-bz = cover(d_bz)
-canvas *= (1 - 0.6 * shadow(bz, 4, 7, 6, 1.0))[..., None]
-h_bz = bevel(d_bz, 6, 5) - bevel(sd_rrect(sx0 - 2, sy0 - 2, sx1 + 2, sy1 + 2, 9), 3, 6)
-bz_col = shade(normals(h_bz), np.array([20, 19, 22], np.float32), amb=0.4, spec=0.35, shin=40)
-canvas = over(canvas, bz_col, bz)
-glass = cover(sd_rrect(sx0, sy0, sx1, sy1, 9))
-canvas = over(canvas, np.array([14, 9, 6], np.float32), glass)
-
-# ---- boutons chromés (moletage + chapeau tourné) ----
-def knob(cx, cy, R, cap, knurl=36):
-    global canvas
-    d_o = sd_circle(cx, cy, R)
-    m = cover(d_o)
-    canvas *= (1 - 0.7 * shadow(m, 5, 9, 7, 1.0))[..., None]
-    ang = np.arctan2(yy - cy, xx - cx)
-    rr = np.hypot(xx - cx, yy - cy)
-    # jupe moletée
-    h = bevel(d_o, R - cap + 2, 10) + 0.9 * np.cos(ang * knurl * 2) * np.clip((rr - cap) / 3, 0, 1) * (rr < R)
-    n = normals(h)
-    skirt = chrome(n, (0.92, 0.93, 0.97), bands=0.6) * 0.82
-    canvas = over(canvas, skirt, m)
-    # chapeau : métal tourné (reflets en ailes de papillon fixes)
-    d_c = sd_circle(cx, cy, cap)
-    cm = cover(d_c)
-    ring = 0.5 + 0.5 * np.cos(2 * (ang - math.radians(-128)))
-    spun = 120 + 95 * ring ** 1.6 + 7 * np.sin(rr * 2.3) + noise(0.35, 4, None) * 0.6
-    edge = bevel(d_c, 4, 3)
-    n_c = normals(edge)
-    rim = np.clip(n_c @ LIGHT, 0, 1)
-    cap_col = np.dstack([spun, spun, spun * 1.03]) * (0.82 + 0.3 * rim[..., None])
-    cap_col = cap_col + 30 * (1 - rr / cap)[..., None] * (rr < cap)[..., None]
-    canvas = over(canvas, cap_col, cm)
-    # liseré sombre entre jupe et chapeau
-    canvas = over(canvas, np.array([30, 30, 34], np.float32), np.exp(-((d_c - 0.5) / 0.9) ** 2) * 0.7)
-
-knob(*KNOB, KNOB_R, KNOB_CAP, knurl=48)
-for c in SMALL: knob(*c, SMALL_R, SMALL_CAP, knurl=30)
-
-# ---- vis de façade ----
-def screw(cx, cy, r=8.5, slot_a=0.5):
-    global canvas
-    d = sd_circle(cx, cy, r); m = cover(d)
-    canvas *= (1 - 0.5 * shadow(m, 2, 3, 2, 1.0))[..., None]
-    h = bevel(d, r, 3.5)
-    # empreinte cruciforme
-    u = (xx - cx) * math.cos(slot_a) + (yy - cy) * math.sin(slot_a)
-    v = -(xx - cx) * math.sin(slot_a) + (yy - cy) * math.cos(slot_a)
-    slot = ((np.abs(u) < 1.3) | (np.abs(v) < 1.3)) & (np.hypot(u, v) < r * 0.6)
-    h = h - slot * 2.0
-    canvas = over(canvas, chrome(normals(h), (0.9, 0.9, 0.95), pos_wave=False) * 0.8, m)
-
-for (x, y) in ((952, 48), (952, 880)): screw(x, y, slot_a=0.4 + x * 0.01)
-
-# ---- jacks (kit Studio Wiga) + inscriptions sur la tranche ----
-cimg = to_img(canvas).convert("RGBA")
-jo = Image.open(os.path.join(ROOT, "embase_jack_gauche_OUT.png")); ji = Image.open(os.path.join(ROOT, "embase_jack_droite_IN.png"))
-js = 0.36 * SS
-jo = jo.resize((round(jo.width * js), round(jo.height * js)), Image.LANCZOS); ji = ji.resize((round(ji.width * js), round(ji.height * js)), Image.LANCZOS)
-cimg.alpha_composite(jo, (round(BODY[0] * SS - jo.width + 4 * SS), round(JACK_Y * SS - jo.height / 2)))
-cimg.alpha_composite(ji, (round(BODY[2] * SS - 4 * SS), round(JACK_Y * SS - ji.height / 2)))
-
-def side_label(x, y, s_, rot):
-    f = F(FM, 19)
-    tw = int(f.getlength(s_)) + 10; th = round(30 * SS)
-    im = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
-    ImageDraw.Draw(im).text((tw / 2, th / 2), s_, font=f, fill=INK + (235,), anchor="mm")
-    im = im.rotate(rot, expand=True, resample=Image.BICUBIC)
-    cimg.alpha_composite(im, (round(x * SS - im.width / 2), round(y * SS - im.height / 2)))
-side_label(BODY[0] + 20, JACK_Y, "OUT", 90)
-side_label(BODY[2] - 20, JACK_Y, "IN", -90)
-
-background = down(cimg)
-background.convert("RGB").save(os.path.join(ROOT, "background.png"))
-
-# ------------------------------------------------------------------ 5) plateau (orteil enfoncé), calque séparé
-d_pl = sd_rrect(L0, T0, R0, B0, 30)
-pm = cover(d_pl)
-# cadre chromé
-h_pl = bevel(d_pl, 14, 12)
-IN0, INT0, INR, INB = L0 + 30, T0 + 34, R0 - 30, B0 - 38
-d_rub = sd_rrect(IN0, INT0, INR, INB, 18)
-h_pl -= bevel(-d_rub - 0.0, 1, 0) * 0      # (garde la forme)
-lip = np.exp(-((d_rub - 1.5) / 2.2) ** 2)    # lèvre arrondie autour du caoutchouc
-h_pl += lip * 2.5
-n_pl = normals(h_pl)
-frame_col = chrome(n_pl, (0.93, 0.94, 0.98), bands=1.0)
-# léger brossé dans le sens de la longueur
-frame_col += (noise(0.4, 1, 21) * 4)[..., None]
-plate = frame_col.copy()
-
-# caoutchouc : nervures transversales sur toute la surface
-rub = cover(d_rub)
-ry0, ry1 = INT0 + 18, INB - 14
-period = 19.0
-ph = (yy - ry0) / period
-rib = 0.5 - 0.5 * np.cos(2 * math.pi * ph)
-rib = rib ** 0.6 * 4.0
-rib *= np.clip((xx - IN0 - 14) / 6, 0, 1) * np.clip((INR - 14 - xx) / 6, 0, 1)
-rib *= np.clip((yy - ry0) / 4, 0, 1) * np.clip((ry1 - yy) / 4, 0, 1)
-h_rub = bevel(d_rub, 6, 3) + rib + noise(0.5, 0.18, 22)
-
-n_rub = normals(h_rub)
-rub_col = shade(n_rub, np.array([22, 21, 23], np.float32), amb=0.35, diff=0.95, spec=0.10, shin=10)
-rub_col += shade(n_rub, 0, amb=0, diff=0, spec=0.06, shin=60)
-plate = over(plate, rub_col, rub)
-# ombre interne du caoutchouc (il est en retrait du cadre)
-inner_sh = np.clip(blur(1 - rub, 3) * rub, 0, 1)
-plate *= (1 - 0.5 * inner_sh)[..., None]
-# vis du cadre
-pimg = Image.fromarray(np.dstack([np.clip(plate, 0, 255), pm * 255]).astype(np.uint8), "RGBA")
-canvas_backup = canvas
-canvas = plate
-for (x, y) in ((L0 + 15, T0 + 16), (R0 - 15, T0 + 16), (L0 + 15, B0 - 18), (R0 - 15, B0 - 18)):
-    screw(x, y, r=7.5, slot_a=0.3 + y * 0.01)
-plate = canvas; canvas = canvas_backup
-pimg = Image.fromarray(np.dstack([np.clip(plate, 0, 255), pm * 255]).astype(np.uint8), "RGBA")
-treadle = down(pimg)
-treadle.save(os.path.join(ROOT, "treadle_down.png"))
-
-# ------------------------------------------------------------------ 6) sprites footswitch / inverseur (rendus à part)
-def render_sprite(size, fn):
-    global xx, yy, HH, WW
-    sv = (xx, yy, HH, WW)
-    WW = HH = size * SS
-    yy, xx = np.mgrid[0:HH, 0:WW].astype(np.float32)
-    xx = (xx + 0.5) / SS; yy = (yy + 0.5) / SS
-    out = fn(size)
-    xx, yy, HH, WW = sv
-    return out
-
-def fs_sprite(sz):
-    c = sz / 2
-    col = np.zeros((HH, WW, 3), np.float32); a = np.zeros((HH, WW), np.float32)
-    # écrou hexagonal
-    ang = np.arctan2(yy - c, xx - c); rr = np.hypot(xx - c, yy - c)
-    hexr = 54 * math.cos(math.pi / 6) / np.cos(((ang + math.pi / 6) % (math.pi / 3)) - math.pi / 6)
-    d_hex = rr - hexr
-    h = bevel(d_hex, 5, 4)
-    col = over(col, chrome(normals(h), (0.9, 0.9, 0.94), pos_wave=False) * 0.85, cover(d_hex)); a = np.maximum(a, cover(d_hex))
-    # bague
-    d_r = rr - 44; h2 = bevel(d_r, 7, 6)
-    col = over(col, col * 0.4, np.clip(blur(cover(d_r), 2) - cover(d_r - 2), 0, 1))
-    col = over(col, chrome(normals(h2), (0.94, 0.94, 0.98), pos_wave=False), cover(d_r))
-    # capuchon bombé
-    d_cp = rr - 32
-    dome = np.sqrt(np.clip(1 - (rr / 32) ** 2, 0, 1)) * 7
-    col = over(col, chrome(normals(dome + bevel(d_cp, 2, 1)), (0.96, 0.96, 1.0), pos_wave=False), cover(d_cp))
-    return Image.fromarray(np.dstack([np.clip(col, 0, 255), a * 255]).astype(np.uint8), "RGBA").resize((sz, sz), Image.LANCZOS)
-
-fs = render_sprite(round(FS[2] - FS[0]), fs_sprite)
+# footswitch : disque adouci autour de l'écrou hexagonal
+fx0, fy0 = FSW[0] - FS_HALF, FSW[1] - FS_HALF
+fs = img.crop((fx0, fy0, fx0 + 2 * FS_HALF, fy0 + 2 * FS_HALF)).convert("RGBA")
+fa = Image.new("L", fs.size, 0); ImageDraw.Draw(fa).ellipse((6, 6, fs.width - 6, fs.height - 6), fill=255)
+fs.putalpha(fa.filter(ImageFilter.GaussianBlur(5)))
+fsz = round(2 * FS_HALF * S * AS)
+fs = fs.resize((fsz, fsz), Image.LANCZOS)
 fs.save(os.path.join(ROOT, "fs_on.png")); fs.save(os.path.join(ROOT, "fs_off.png"))
 
-def toggle_sprite(right):
-    def f(sz):
-        c = sz / 2
-        col = np.zeros((HH, WW, 3), np.float32); a = np.zeros((HH, WW), np.float32)
-        rr = np.hypot(xx - c, yy - c)
-        ang = np.arctan2(yy - c, xx - c)
-        hexr = 15 * math.cos(math.pi / 6) / np.cos(((ang + math.pi / 6) % (math.pi / 3)) - math.pi / 6)
-        d_hex = rr - hexr
-        col = over(col, chrome(normals(bevel(d_hex, 2.5, 2)), (0.9, 0.9, 0.94), pos_wave=False) * 0.85, cover(d_hex)); a = np.maximum(a, cover(d_hex))
-        d_b = rr - 9
-        col = over(col, chrome(normals(bevel(d_b, 4, 4)), (0.95, 0.95, 0.98), pos_wave=False), cover(d_b))
-        # levier (batte) incliné vers la gauche ou la droite, vu de dessus
-        sgn = 1 if right else -1
-        x0, x1 = c, c + sgn * 27
-        t = np.clip((xx - x0) / (x1 - x0), 0, 1)
-        wdt = 3.2 + 2.6 * t
-        d_lv = np.maximum(np.abs(yy - c) - wdt, -np.minimum((xx - x0) * sgn, (x1 - xx) * sgn))
-        d_lv = np.minimum(d_lv, np.hypot(xx - x1, yy - c) - 5.8)
-        lv = cover(d_lv)
-        # ombre du levier
-        sh = shadow(lv, 3, 5, 2, 0.7)
-        col = col * (1 - 0.6 * sh[..., None]); a = np.maximum(a, sh * 0.6)
-        cyl = np.clip((yy - c) / np.maximum(wdt, 1), -1, 1)
-        n = np.dstack([np.zeros_like(cyl), cyl, np.sqrt(np.clip(1 - cyl ** 2, 0, 1))])
-        col = over(col, chrome(n, (0.97, 0.97, 1.0), pos_wave=False) * (0.85 + 0.2 * t[..., None]), lv); a = np.maximum(a, lv)
-        return Image.fromarray(np.dstack([np.clip(col, 0, 255), a * 255]).astype(np.uint8), "RGBA").resize((sz, sz), Image.LANCZOS)
-    return f
+# inverseur : levier + écrou détourés ; position AUTO = miroir
+def toggle_sprite(rgb, alpha):
+    shd = np.roll(np.roll(alpha, 9, 0), 6, 1)
+    shd = cv2.GaussianBlur(shd, (0, 0), 5) * 0.6
+    a = np.clip(alpha + shd * (1 - alpha), 0, 1)
+    col = rgb * (alpha / np.maximum(a, 1e-3))[..., None]           # l'ombre est noire
+    return Image.fromarray(np.dstack([col, a * 255]).clip(0, 255).astype(np.uint8), "RGBA")
+tsz = (round(200 * S * AS), round(124 * S * AS))
+toggle_sprite(crop, tog_alpha).resize(tsz, Image.LANCZOS).save(os.path.join(ROOT, "toggle_l.png"))
+toggle_sprite(crop[:, ::-1].copy(), tog_alpha[:, ::-1].copy()).resize(tsz, Image.LANCZOS).save(os.path.join(ROOT, "toggle_r.png"))
 
-TG_SZ = 64
-render_sprite(TG_SZ, toggle_sprite(False)).save(os.path.join(ROOT, "toggle_l.png"))
-render_sprite(TG_SZ, toggle_sprite(True)).save(os.path.join(ROOT, "toggle_r.png"))
-TGC = ((TOGGLE[0] + TOGGLE[2]) / 2, (TOGGLE[1] + TOGGLE[3]) / 2)
-
-# ------------------------------------------------------------------ 7) aperçu orteil levé (même calcul que le plugin)
-rise, widen = 26.0, 1.035
-cxm = (L0 + R0) / 2
-M = cv2.getPerspectiveTransform(np.float32([[L0, T0], [R0, T0], [R0, B0], [L0, B0]]),
-                                np.float32([[cxm - (cxm - L0) * widen, T0 - rise], [cxm + (R0 - cxm) * widen, T0 - rise], [R0, B0], [L0, B0]]))
-up = cv2.warpPerspective(np.array(treadle), M, (W, H), flags=cv2.INTER_CUBIC)
-prev = background.convert("RGBA"); prev.alpha_composite(Image.fromarray(up, "RGBA"))
-for (sp, box) in ((fs, FS), (render_sprite(TG_SZ, toggle_sprite(True)), (TGC[0] - 32, TGC[1] - 32, TGC[0] + 32, TGC[1] + 32))):
-    prev.alpha_composite(sp, (round(box[0]), round(box[1])))
-prev.convert("RGB").save(os.path.join(ROOT, "design", "apercu_treadle_up.png"))
-
+# ------------------------------------------------------------------ 3) coordonnées pour PluginEditor.cpp
 with open(os.path.join(ROOT, "tools", "layout.txt"), "w") as fo:
-    fo.write(f"knob {KNOB[0]} {KNOB[1]} R {KNOB_R} cap {KNOB_CAP} arc {RANGE_A0} {RANGE_SPAN}\n")
-    for n, (x, y) in zip(("q", "purr", "boost"), SMALL): fo.write(f"{n} {x} {y}\n")
-    fo.write(f"smallR {SMALL_R} smallCap {SMALL_CAP}\nscreen {SCREEN}\nfs {FS}\nfsled {FS_LED}\ntoggle centre {TGC} size {TG_SZ}\nplate {PLATE}\n")
-print("ok")
+    fo.write(f"frame {FW} x {int(FH)}  (assets x{AS})  S {S:.6f}\n")
+    fo.write(f"plate L {F(PLATE[0]):.1f} T {F(PLATE[1]):.1f} R {F(PLATE[2]):.1f} hinge {F(PLATE[3]):.1f} radius {F(PLATE_R):.1f}\n")
+    fo.write(f"knob {F(KNOB[0]):.1f} {F(KNOB[1]):.1f} R {F(KNOB[2]):.1f} cap {F(KNOB[3]):.1f}\n")
+    for n_, (x, y) in zip(("capRange", "capQ", "capPurr", "capBoost"), CAPS): fo.write(f"{n_} {F(x):.1f} {F(y):.1f}\n")
+    for i, (x, y) in enumerate(NUMBERS): fo.write(f"num{i + 1} {F(x):.1f} {F(y):.1f}\n")
+    for n_, (x, y) in zip(("q", "purr", "boost"), SMALL): fo.write(f"{n_} {F(x):.1f} {F(y):.1f}\n")
+    fo.write(f"smallR {F(SMALL_R):.1f} smallCap {F(SMALL_CAP):.1f}\n")
+    fo.write(f"screen {F(SCREEN[0]):.1f} {F(SCREEN[1]):.1f} {F(SCREEN[2] - SCREEN[0]):.1f} {F(SCREEN[3] - SCREEN[1]):.1f}\n")
+    fo.write(f"fs {F(fx0):.1f} {F(fy0):.1f} {F(2 * FS_HALF):.1f}\nled {F(LED[0]):.1f} {F(LED[1]):.1f}\n")
+    fo.write(f"toggle {F(tx0):.1f} {F(ty0):.1f} {F(200):.1f} {F(124):.1f}\n")
+print("ok", FW, OW, OH)

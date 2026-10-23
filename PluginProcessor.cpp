@@ -39,7 +39,7 @@ AudioProcessorValueTreeState::ParameterLayout CrycatProcessor::createLayout()
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "active", 1 }, "Effect On (footswitch)", true));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "auto", 1 }, "Auto-Engage (MAN / AUTO switch)", false));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "smooth", 1 }, "Pedal Glide (smoothing)",
-                                                        NormalisableRange<float> (0.0f, 250.0f, 0.0f, 0.5f), 20.0f, AudioParameterFloatAttributes().withLabel ("ms")));
+                                                        NormalisableRange<float> (0.0f, 250.0f, 0.0f, 0.5f), 15.0f, AudioParameterFloatAttributes().withLabel ("ms")));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "autooff", 1 }, "Auto-Engage Release (heel rest time)",
                                                         NormalisableRange<float> (100.0f, 2000.0f, 0.0f, 0.5f), 400.0f, AudioParameterFloatAttributes().withLabel ("ms")));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "heel", 1 }, "MIDI Pedal Calibration Heel (min)", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
@@ -159,7 +159,13 @@ void CrycatProcessor::handleMidiMessage (const MidiMessage& m)
                 if (v < calMin.load()) calMin = v;
                 if (v > calMax.load()) calMax = v;
             }
+            pedalMsb = v;
             pedalLive = mapPedal ((float) v / 127.0f);
+        }
+        else if (ccPedal.load() < 32 && c == ccPedal.load() + 32 && pedalMsb >= 0)
+        {
+            // contrôleur 14 bits (CC n + CC n+32) : résolution fine, si la pédale l'envoie
+            pedalLive = mapPedal ((float) (pedalMsb * 128 + v) / 16383.0f);
         }
         const bool on = v >= 64;
         // footswitch MIDI : momentané (bascule à chaque appui) ou à accrochage (127 = ON, 0 = OFF)
@@ -211,6 +217,23 @@ void CrycatProcessor::startCalibration()
     setParamValue ("heel", 0.0f); setParamValue ("toe", 1.0f);
 }
 
+// réglages pour un segment de bloc : quand la position demandée change (MIDI, automation, souris), la pédale rejoint
+// la nouvelle valeur par une rampe de la durée mesurée entre les deux derniers changements (2 à 40 ms) -> mouvement continu
+crycat::Settings CrycatProcessor::settingsAt (int offset)
+{
+    auto s = currentSettings();
+    const juce::int64 now = sampleClock + offset;
+    if (s.pedal != lastPedalTarget)
+    {
+        const double interval = (double) (now - lastPedalChange);
+        rampSamples = (int) jlimit (0.002 * sr, 0.040 * sr, interval);
+        lastPedalChange = now;
+        lastPedalTarget = s.pedal;
+    }
+    s.pedalRampSamples = rampSamples;
+    return s;
+}
+
 // fin de la calibration (6 s) : appliquée sur le thread de la fenêtre (appelé par l'audio et par la fenêtre)
 void CrycatProcessor::pollCalibration()
 {
@@ -234,10 +257,11 @@ void CrycatProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midi
     for (const auto meta : midi)
     {
         const int at = jlimit (0, n, meta.samplePosition);
-        if (at > pos) { engine.setSettings (currentSettings()); engine.process (ch, nch, pos, at - pos); pos = at; }
+        if (at > pos) { engine.setSettings (settingsAt (pos)); engine.process (ch, nch, pos, at - pos); pos = at; }
         handleMidiMessage (meta.getMessage());
     }
-    if (pos < n) { engine.setSettings (currentSettings()); engine.process (ch, nch, pos, n - pos); }
+    if (pos < n) { engine.setSettings (settingsAt (pos)); engine.process (ch, nch, pos, n - pos); }
+    sampleClock += n;
 
     pedalShown = engine.smoothedPedal();
     engagedShown = engine.isEngaged();

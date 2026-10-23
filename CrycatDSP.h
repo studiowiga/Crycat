@@ -41,7 +41,8 @@ namespace crycat
         float boost    = 0.0f;     // 0..1 -> 0..15 dB
         bool  active   = true;     // footswitch
         bool  autoMode = false;    // AUTO-ENGAGE
-        float smoothMs = 20.0f;    // glissé de la pédale
+        float smoothMs = 15.0f;    // glissé de la pédale (2 pôles en cascade)
+        int   pedalRampSamples = 0; // durée de la rampe vers une nouvelle position (= intervalle mesuré entre deux CC MIDI)
         float autoOffMs = 400.0f;  // temps de repos au talon avant coupure (mode AUTO)
     };
 
@@ -89,7 +90,11 @@ namespace crycat
         void reset()
         {
             for (auto& c : ch) c = {};
-            smoothPos = target.pedal;
+            smoothPos = rampVal = rampTarget = sm1 = target.pedal;
+            rampLeft = 0;
+            logFc = std::log (centreHz (target.rangeIdx, target.pedal));
+            qS = effectiveQ (target.q, target.pedal);
+            purrS = target.purr;
             engaged = ! target.autoMode || target.pedal > 0.035f;
             restCount = 0;
             wet = (target.active && (! target.autoMode || engaged)) ? 1.0f : 0.0f;
@@ -102,13 +107,14 @@ namespace crycat
         void process (float* const* data, int nch, int start, int n)
         {
             nch = std::min (nch, kMaxCh);
-            const float sm = (float) std::exp (-1.0 / (std::max (0.5f, target.smoothMs) * 0.001 * sr));
+            // glissé : deux filtres 1 pôle en cascade (pas de cassure de pente), chacun de la moitié du temps demandé
+            const float sm = (float) std::exp (-1.0 / (std::max (0.25f, 0.5f * target.smoothMs) * 0.001 * sr));
+            const float cf = (float) std::exp (-2.0 / (0.025 * sr));        // fréquence / Q : lissage 25 ms (changement de plage, automation)
+            const float ps = (float) std::exp (-1.0 / (0.03 * sr));         // PURR : lissage 30 ms
             const float xf = (float) (1.0 / (0.012 * sr));                    // fondu de bypass 12 ms
             const float gs = (float) std::exp (-1.0 / (0.02 * sr));           // lissage du boost
             const float bTarget = boostGain (target.boost);
-            const float purr = std::clamp (target.purr, 0.0f, 1.0f);
-            const float drive = 1.0f + 5.0f * purr * purr + 1.5f * purr;
-            const float k = 0.15f + 2.6f * purr;                               // saturation de l'état de l'inducteur
+            const float purrT = std::clamp (target.purr, 0.0f, 1.0f);
             const float dcA = (float) std::exp (-2.0 * kPi * 18.0 / sr);
             const int autoOffSamples = (int) (std::max (50.0f, target.autoOffMs) * 0.001 * sr);
 
@@ -124,21 +130,37 @@ namespace crycat
                 const bool on = target.active && engaged;
                 wet += on ? std::min (xf, 1.0f - wet) : -std::min (xf, wet);
 
-                smoothPos = target.pedal + (smoothPos - target.pedal) * sm;
+                // ---- pédale : rampe linéaire jusqu'à la nouvelle position (sur l'intervalle entre deux messages MIDI),
+                //      puis lissage à 2 pôles -> aucune marche audible même avec un contrôleur 7 bits lent (Bluetooth)
+                if (target.pedal != rampTarget)
+                {
+                    rampTarget = target.pedal;
+                    rampLeft = std::max (1, target.pedalRampSamples);
+                    rampStep = (rampTarget - rampVal) / (float) rampLeft;
+                }
+                if (rampLeft > 0) { rampVal += rampStep; if (--rampLeft == 0) rampVal = rampTarget; }
+                sm1 = rampVal + (sm1 - rampVal) * sm;
+                smoothPos = sm1 + (smoothPos - sm1) * sm;
                 boostLin = bTarget + (boostLin - bTarget) * gs;
+                purrS = purrT + (purrS - purrT) * ps;
 
-                // coefficients (recalculés tous les 4 échantillons)
-                if ((coefCount++ & 3) == 0)
+                // coefficients (recalculés tous les 2 échantillons), fréquence lissée en échelle logarithmique
+                if ((coefCount++ & 1) == 0)
                 {
                     const float pos = smoothPos;
-                    fc = centreHz (target.rangeIdx, pos);
-                    const float Q = effectiveQ (target.q, pos);
+                    logFc = std::log (centreHz (target.rangeIdx, pos)) + (logFc - std::log (centreHz (target.rangeIdx, pos))) * cf;
+                    fc = std::exp (logFc);
+                    const float qT = effectiveQ (target.q, pos);
+                    qS = qT + (qS - qT) * cf;
+                    const float Q = qS;
                     g = (float) std::tan (kPi * std::min ((double) fc, 0.45 * sr) / sr);
                     R = 0.5f / Q;
                     hNorm = 1.0f / (1.0f + 2.0f * R * g + g * g);
                     pg = peakGain (Q);
                     lk = lowLeak (pos);
                     const double fl = 0.7 * fc;
+                    drive = 1.0f + 5.0f * purrS * purrS + 1.5f * purrS;
+                    k = 0.15f + 2.6f * purrS;                                   // saturation de l'état de l'inducteur
                     lpA = (float) std::exp (-2.0 * kPi * fl / sr);
                 }
 
@@ -148,9 +170,9 @@ namespace crycat
                     const float x = data[c][i];
                     // étage d'entrée : légère asymétrie + saturation douce (PURR)
                     float xi = x * drive;
-                    xi = xi + 0.12f * purr * xi * xi;
-                    xi = xi / (1.0f + purr * std::abs (xi));               // PURR à 0 : entrée parfaitement linéaire
-                    xi *= (1.0f + 0.4f * purr) / drive;
+                    xi = xi + 0.12f * purrS * xi * xi;
+                    xi = xi / (1.0f + purrS * std::abs (xi));              // PURR à 0 : entrée parfaitement linéaire
+                    xi *= (1.0f + 0.4f * purrS) / drive;
 
                     // filtre d'état (TPT) : passe-bande résonant
                     const float hp = (xi - (2.0f * R + g) * st.s1 - st.s2) * hNorm;
@@ -188,6 +210,9 @@ namespace crycat
         Settings target;
         double sr = 44100.0;
         float smoothPos = 0.0f, wet = 1.0f, boostLin = 1.0f;
+        float rampVal = 0.0f, rampTarget = 0.0f, rampStep = 0.0f, sm1 = 0.0f;
+        int rampLeft = 0;
+        float logFc = 6.1f, qS = 4.4f, purrS = 0.2f, drive = 1.0f, k = 0.15f;
         float fc = 450.0f, g = 0.03f, R = 0.1f, hNorm = 1.0f, pg = 2.2f, lk = 0.6f, lpA = 0.9f;
         unsigned coefCount = 0;
         bool engaged = true;

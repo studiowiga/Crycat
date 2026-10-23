@@ -104,6 +104,33 @@ int main()
         CHECK (err < 1e-6f, "bypass %.2g", err);
     }
 
+    // 7) pédale MIDI 7 bits lente (Bluetooth, ~30 messages/s, pas de 4) : la fréquence doit glisser sans marches
+    {
+        auto run = [] (bool ramp, float& ratio)
+        {
+            const double sr = 48000.0; const int every = (int) (0.033 * sr);
+            Settings t; t.smoothMs = 15.0f;
+            Engine e; e.setSettings (t); e.prepare (sr, 64);
+            std::vector<float> b (64, 0.0f); float* p[1] = { b.data() };
+            std::vector<double> lf;                       // log(fc) toutes les 64 échantillons
+            int cc = 0;
+            for (int i = 0; i < (int) (2.0 * sr) / 64; ++i)
+            {
+                if ((i * 64) % every < 64 && cc < 127) { cc = std::min (127, cc + 4); }
+                t.pedal = (float) cc / 127.0f; t.pedalRampSamples = ramp ? every : 0; e.setSettings (t);
+                e.process (p, 1, 0, 64);
+                lf.push_back (std::log (e.currentHz()));
+            }
+            // pente par pas de 64 échantillons, sur la partie montante
+            double mx = 0, sum = 0; int nn = 0;
+            for (size_t i = 20; i + 1 < lf.size() && i < 600; ++i) { const double d = lf[i + 1] - lf[i]; mx = std::max (mx, d); sum += d; ++nn; }
+            ratio = (float) (mx / (sum / nn));
+        };
+        float rOld, rNew; run (false, rOld); run (true, rNew);
+        std::printf ("pédale MIDI : irrégularité de la pente %.2f (sans rampe) -> %.2f (avec rampe)\n", rOld, rNew);
+        CHECK (rNew < 1.35f, "pente irrégulière %.2f", rNew);
+    }
+
     std::printf (fails ? "%d échec(s)\n" : "tous les tests passent\n", fails);
     return fails ? 1 : 0;
 }

@@ -5,31 +5,37 @@ using namespace juce;
 
 namespace
 {
-    // Repère du dessin = taille de background.png. Toutes les coordonnées sont dans ces pixels (tools/layout.txt).
-    // Mêmes dimensions de fenêtre que Wharry : hauteurs de Ring Think (495 / 557 / 743 px) -> 544 x 495 par défaut et au minimum
-    constexpr int kW = 1020, kH = 928;
+    // Repère du dessin : 911 x 928 (design de l'utilisateur, tools/layout.txt). Les images sont livrées en 2x (HiDPI).
+    // Format double : mêmes hauteurs de fenêtre que Ring Think (495 / 557 / 743 px), largeur selon les proportions de la pédale
+    // -> 486 x 495 par défaut et au minimum.
+    constexpr int kW = 911, kH = 928;
+    constexpr float kAsset = 2.0f;                               // résolution des images / repère
     constexpr float kRefH = 743.0f;                              // hauteur « 100 % » (= Ring Think à 100 %)
     const float kScales[3] = { 495.0f / 743.0f, 0.75f, 1.0f };
     constexpr float kDefaultScale = 495.0f / 743.0f;             // fenêtre par défaut (= taille minimale)
 
-    const Point<float> kKnob (633.0f, 300.0f);  constexpr float kKnobR = 60.0f, kCapR = 44.0f;   // sélecteur RANGE 6 crans
-    constexpr float kRangeA0 = -125.0f, kRangeSpan = 250.0f;
-    const Point<float> kSmall[3] = { { 632.0f, 528.0f }, { 752.0f, 528.0f }, { 872.0f, 528.0f } };   // Q, PURR, BOOST
-    constexpr float kSmallR = 42.0f, kSmallCapR = 32.0f;
+    // ---- commandes (tools/layout.txt) ----
+    const Point<float> kKnob (565.6f, 296.8f), kKnobCap (565.6f, 296.1f);  constexpr float kKnobR = 55.1f, kCapR = 40.7f;   // RANGE
+    const Point<float> kNumPos[6] = { { 503.6f, 343.3f }, { 491.0f, 279.2f }, { 528.5f, 227.0f }, { 591.2f, 226.2f }, { 632.6f, 283.2f }, { 625.0f, 346.9f } };
+    const Point<float> kSmall[3]    = { { 562.0f, 522.4f }, { 672.9f, 520.9f }, { 783.2f, 523.1f } };     // Q, PURR, BOOST (jupes)
+    const Point<float> kSmallCap[3] = { { 563.4f, 524.5f }, { 674.7f, 524.2f }, { 784.6f, 525.6f } };     // chapeaux (vus un peu en biais)
+    constexpr float kSmallR = 40.7f, kSmallCapR = 29.9f;
     const char* const kSmallId[3] = { "q", "purr", "boost" };
-    const Rectangle<float> kScreen (744.0f, 186.0f, 204.0f, 232.0f);
-    const Rectangle<float> kFs (681.0f, 668.0f, 138.0f, 138.0f);           // footswitch ON / OFF
-    const Point<float> kFsLed (857.0f, 737.0f);
-    const Rectangle<float> kToggle (858.0f, 84.0f, 64.0f, 64.0f);          // inverseur MAN / AUTO (sprite 64 x 64)
-    const Rectangle<float> kToggleHit (812.0f, 88.0f, 160.0f, 70.0f);
-    const Rectangle<float> kPlate (84.0f, 35.0f, 444.0f, 845.0f);          // plateau
-    constexpr float kLedR = 7.0f;
-    const Colour kInk (0xffece5e0), kAmber (0xffffb040), kAmberHi (0xffffd690), kScreenBg (0xff0e0906);
+    const Rectangle<float> kScreen (656.0f, 199.2f, 196.7f, 226.2f);
+    constexpr float kScreenRadius = 6.5f;
+    const Rectangle<float> kFs (615.7f, 668.6f, 108.1f, 108.1f);           // footswitch ON / OFF
+    const Point<float> kFsLed (772.4f, 724.8f);
+    const Rectangle<float> kToggle (759.4f, 107.4f, 72.0f, 44.7f);         // inverseur MAN / AUTO (sprite)
+    const Rectangle<float> kToggleHit (722.0f, 98.0f, 160.0f, 62.0f);
+    constexpr float kLedR = 7.6f;
+    const Colour kInk (0xffe2e0de), kAmber (0xffffb040), kAmberHi (0xffffd690), kScreenBg (0xff0e0a07);
     constexpr int kFrames = 33;                                             // positions précalculées du plateau
 
-    // plateau : il pivote autour de la charnière (côté talon, en bas)
-    constexpr float kPlateL = 84.0f, kPlateR = 528.0f, kPlateTop = 35.0f, kHingeY = 880.0f;
-    constexpr float kRise = 26.0f, kWiden = 1.035f;                                            // orteil levé : pointe plus haute et plus large
+    // plateau à plat (orteil enfoncé, tel que dans le design) ; il pivote autour de la charnière, côté talon
+    constexpr float kPlateL = 65.9f, kPlateR = 473.0f, kPlateTop = 24.9f, kHingeY = 870.4f;
+    const Rectangle<float> kPlate (kPlateL, kPlateTop, kPlateR - kPlateL, kHingeY - kPlateTop);
+    constexpr float kRise = 18.0f, kWiden = 1.03f;                          // orteil levé : pointe plus haute et plus large (perspective)
+    constexpr float kThick = 7.0f;                                          // épaisseur visible du plateau (tranches)
 
     Image loadPng (const void* d, int n) { return ImageFileFormat::loadFrom (d, (size_t) n).convertedToFormat (Image::ARGB); }
 
@@ -37,12 +43,13 @@ namespace
     struct ScaledCache
     {
         Image src, img; float scale = -1.0f;
-        const Image& get (float s)
+        const Image& get (float s)       // s = pixels écran par unité du repère
         {
             if (std::abs (s - scale) > 1.0e-4f || ! img.isValid())
             {
                 scale = s;
-                const int w = jmax (1, roundToInt ((float) src.getWidth() * s)), h = jmax (1, roundToInt ((float) src.getHeight() * s));
+                const float k = s / kAsset;
+                const int w = jmax (1, roundToInt ((float) src.getWidth() * k)), h = jmax (1, roundToInt ((float) src.getHeight() * k));
                 img = src.rescaled (w, h, Graphics::highResamplingQuality);
             }
             return img;
@@ -50,9 +57,6 @@ namespace
     };
 
     //==========================================================================
-    // Plateau de la pédale : il pivote autour de la charnière (côté talon, en bas). Chaque position est une
-    // perspective exacte du calque « orteil enfoncé » (pas de fondu entre deux images -> aucun dédoublement).
-
     struct Homography
     {
         double h[9] {};
@@ -91,6 +95,13 @@ namespace
         }
     };
 
+    //==========================================================================
+    // Plateau en mouvement. Chaque position est une perspective exacte du calque « orteil enfoncé », avec :
+    //   - la face du plateau qui s'assombrit en se relevant (elle s'écarte de la lumière, en haut à gauche) et un reflet
+    //     qui glisse sur le chrome pendant la bascule,
+    //   - les tranches visibles quand la pointe monte (tranche de pointe et tranche gauche éclairées, tranche droite dans l'ombre),
+    //   - une ombre portée qui s'allonge et s'adoucit avec la hauteur (nulle à la charnière, maximale à la pointe),
+    //   - la charnière : le talon s'enfonce dans son logement, une fente sombre s'ouvre et l'axe accroche la lumière.
     class TreadleWarp
     {
     public:
@@ -98,23 +109,24 @@ namespace
         {
             down = std::move (downImg);
             const float cx = 0.5f * (kPlateL + kPlateR);
-            box = Rectangle<float> (cx - (cx - kPlateL) * kWiden - 4.0f, kPlateTop - kRise - 4.0f,
-                                    (kPlateR - kPlateL) * kWiden + 40.0f, kHingeY - kPlateTop + kRise + 40.0f)
-                      .getSmallestIntegerContainer().getIntersection ({ 0, 0, kW, kH });
+            box = Rectangle<float> (cx - (cx - kPlateL) * kWiden - kThick - 6.0f, jmax (0.0f, kPlateTop - kRise - kThick - 4.0f),
+                                    (kPlateR - kPlateL) * kWiden + 2.0f * kThick + 34.0f, 0.0f);
+            box = box.withBottom (kHingeY + 34.0f).getSmallestIntegerContainer().toFloat().getIntersection ({ 0.0f, 0.0f, (float) kW, (float) kH });
             scale = -1.0f;
         }
-        Rectangle<int> designBounds() const { return box; }
+        Rectangle<float> designBounds() const { return box; }
 
         void prepare (float s)
         {
             if (std::abs (s - scale) < 1.0e-4f) return;
             scale = s;
-            const int bw = jmax (1, roundToInt ((float) box.getWidth() * s)), bh = jmax (1, roundToInt ((float) box.getHeight() * s));
-            src = down.getClippedImage (box).rescaled (bw, bh, Graphics::highResamplingQuality).convertedToFormat (Image::ARGB);
+            const int bw = jmax (1, roundToInt (box.getWidth() * s)), bh = jmax (1, roundToInt (box.getHeight() * s));
+            src = down.getClippedImage ((box * kAsset).getSmallestIntegerContainer()).rescaled (bw, bh, Graphics::highResamplingQuality)
+                      .convertedToFormat (Image::ARGB);
             for (auto& f : frames) f = {};
-            }
+        }
 
-        // t = 0 : orteil levé, t = 1 : orteil enfoncé
+        // t = 0 : orteil levé (talon enfoncé), t = 1 : orteil enfoncé
         const Image& frame (int i)
         {
             i = jlimit (0, kFrames - 1, i);
@@ -123,6 +135,8 @@ namespace
         }
 
     private:
+        static uint8 u8 (float v) { return (uint8) jlimit (0, 255, roundToInt (v)); }
+
         Image build (float t) const
         {
             const int w = src.getWidth(), h = src.getHeight();
@@ -133,69 +147,160 @@ namespace
             const Point<double> srcQ[4] = { loc (kPlateL, kPlateTop), loc (kPlateR, kPlateTop), loc (kPlateR, kHingeY), loc (kPlateL, kHingeY) };
             const Point<double> dstQ[4] = { loc (cx - (cx - kPlateL) * wid, kPlateTop - rise), loc (cx + (kPlateR - cx) * wid, kPlateTop - rise),
                                             loc (kPlateR, kHingeY), loc (kPlateL, kHingeY) };
-            Image plate (Image::ARGB, w, h, true);
+            if (lift < 1.0e-4) return src.createCopy();
+
             Homography H;
-            if (lift < 1.0e-4 || ! H.solve (dstQ, srcQ)) plate = src.createCopy();
-            else
+            if (! H.solve (dstQ, srcQ)) return src.createCopy();
+
+            // ---------- 1) face du plateau en perspective ----------
+            Image plate (Image::ARGB, w, h, true);
             {
                 const Image::BitmapData bs (src, Image::BitmapData::readOnly);
                 Image::BitmapData bo (plate, Image::BitmapData::writeOnly);
-                const double topY = dstQ[0].y, botY = dstQ[3].y;
+                const double vTop = srcQ[0].y, vBot = srcQ[3].y;
+                const float dim = (float) (1.0 - 0.13 * lift);                                // la face s'écarte de la lumière
+                const float glint = (float) (70.0 * std::sin (MathConstants<double>::pi * jmin (1.0, lift * 1.15)));
+                const double gc = 0.78 - 0.55 * lift;                                         // le reflet remonte vers la pointe
                 for (int y = 0; y < h; ++y)
-                {
-                    // la partie avant, inclinée vers la lumière (en haut à gauche), s'éclaircit un peu
-                    const double gy = jlimit (0.0, 1.0, (botY - (double) y) / jmax (1.0, botY - topY));
-                    const float gain = (float) (1.0 + 0.10 * lift * std::pow (gy, 1.5));
                     for (int x = 0; x < w; ++x)
                     {
                         const auto q = H.map (x + 0.5, y + 0.5);
                         const double u = q.x - 0.5, v = q.y - 0.5;
                         if (u < -1.0 || v < -1.0 || u > w || v > h) continue;
-                        *(PixelARGB*) bo.getPixelPointer (x, y) = sample (bs, w, h, (float) u, (float) v, gain);
+                        const PixelARGB p = sample (bs, w, h, (float) u, (float) v);
+                        if (p.getAlpha() == 0) continue;
+                        const double vn = (q.y - vTop) / jmax (1.0, vBot - vTop);
+                        const double dg = (vn - gc - 0.18 * ((q.x / w) - 0.5)) / 0.11;               // bande de reflet légèrement oblique
+                        const float band = glint * (float) std::exp (-dg * dg);
+                        const float a = (float) p.getAlpha();
+                        auto ch = [&] (uint8 c)
+                        {
+                            const float lin = (float) c / jmax (1.0f, a);                             // 0..1 non prémultiplié
+                            return u8 (jmin (a, (float) c * dim + band * lin * lin * a / 255.0f));    // le chrome brille, le caoutchouc presque pas
+                        };
+                        PixelARGB o; o.setARGB (p.getAlpha(), ch (p.getRed()), ch (p.getGreen()), ch (p.getBlue()));
+                        *(PixelARGB*) bo.getPixelPointer (x, y) = o;
+                    }
+            }
+
+            // ---------- 2) tranches, extrudées depuis la silhouette réelle du plateau (coins arrondis compris) ----------
+            Image out (Image::ARGB, w, h, true);
+            {
+                const Image::BitmapData bp (plate, Image::BitmapData::readOnly);
+                Image::BitmapData bo (out, Image::BitmapData::readWrite);
+                auto alphaAt = [&] (int x, int y) { return ((const PixelARGB*) bp.getPixelPointer (x, y))->getAlpha(); };
+                auto put = [&] (int x, int y, float a, int r, int g, int b)
+                {
+                    if (x < 0 || y < 0 || x >= w || y >= h || a <= 0.0f) return;
+                    auto* px = (PixelARGB*) bo.getPixelPointer (x, y);
+                    const float k = jmin (1.0f, a);
+                    PixelARGB o;   // prémultiplié
+                    o.setARGB (u8 (255.0f * k + px->getAlpha() * (1.0f - k)), u8 (r * k + px->getRed() * (1.0f - k)),
+                               u8 (g * k + px->getGreen() * (1.0f - k)), u8 (b * k + px->getBlue() * (1.0f - k)));
+                    *px = o;
+                };
+                const double th = kThick * sy * lift;                        // épaisseur apparente à la pointe
+                const double topY = dstQ[0].y, botY = dstQ[3].y;
+                // tranche de pointe : tournée vers le haut, elle accroche la lumière
+                for (int x = 0; x < w; ++x)
+                {
+                    int yt = -1;
+                    for (int y = 0; y < h; ++y) if (alphaAt (x, y) >= 128) { yt = y; break; }
+                    if (yt < 0 || yt > topY + 40.0 * sy) continue;
+                    const double ux = (double) x / (double) w;
+                    const double fh = th * jlimit (0.0, 1.0, 1.0 - ((double) yt - topY) / (34.0 * sy));
+                    for (int k = 1; k <= (int) std::ceil (fh) + 1; ++k)
+                    {
+                        const float cov = (float) jlimit (0.0, 1.0, fh - (k - 1) + 0.3);
+                        const double u = (double) k / jmax (0.5, fh);
+                        const int base = (int) (208 - 100 * u - 28 * ux);
+                        put (x, yt - k, cov, base + 3, base + 2, base + 5);
                     }
                 }
-            }
-            if (lift < 1.0e-4) return plate;
-            // tranche droite du plateau, visible quand la pointe se lève (épaisse côté pointe, nulle à la charnière)
-            {
-                Image::BitmapData bo (plate, Image::BitmapData::readWrite);
-                const double maxFace = 9.0 * sx * lift;
-                const double ty = dstQ[1].y, by = dstQ[2].y;
-                for (int y = jmax (0, (int) std::ceil (ty)); y <= jmin (h - 1, (int) std::floor (by)); ++y)
+                // tranches latérales : épaisses à la pointe, nulles à la charnière ; gauche éclairée, droite dans l'ombre
+                for (int y = 0; y < h; ++y)
                 {
-                    const double v = ((double) y - ty) / jmax (1.0, by - ty);          // 0 = pointe, 1 = charnière
-                    const double xr = dstQ[1].x + (dstQ[2].x - dstQ[1].x) * v;
-                    const double fw = maxFace * (1.0 - v);
-                    if (fw < 0.3) continue;
-                    for (int x = (int) std::floor (xr); x <= jmin (w - 1, (int) std::ceil (xr + fw)); ++x)
+                    const double v = jlimit (0.0, 1.0, ((double) y - topY) / jmax (1.0, botY - topY));
+                    const double fw = 0.55 * th * (1.0 - v);
+                    if (fw < 0.25) continue;
+                    int xl = -1, xr = -1;
+                    for (int x = 0; x < w; ++x) if (alphaAt (x, y) >= 128) { xl = x; break; }
+                    for (int x = w - 1; x >= 0; --x) if (alphaAt (x, y) >= 128) { xr = x; break; }
+                    if (xl < 0) continue;
+                    for (int k = 1; k <= (int) std::ceil (fw) + 1; ++k)
                     {
-                        if (x < 0) continue;
-                        const double u = ((double) x - xr) / fw;                     // 0 = arête, 1 = bas de la tranche
-                        if (u < 0.0 || u > 1.0) continue;
+                        const float cov = (float) jlimit (0.0, 1.0, fw - (k - 1) + 0.3);
+                        const double u = (double) k / jmax (0.5, fw);
+                        const int bl = (int) (178 - 72 * u - 25 * v), br = (int) (64 - 24 * u + 10 * v);
+                        put (xl - k, y, cov, bl + 4, bl + 3, bl + 6);
+                        put (xr + k, y, cov, br + 4, br + 3, br + 6);
+                    }
+                }
+                // face du plateau posée sur les tranches
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                    {
+                        const PixelARGB o = *(const PixelARGB*) bp.getPixelPointer (x, y);
+                        if (o.getAlpha() == 0) continue;
                         auto* px = (PixelARGB*) bo.getPixelPointer (x, y);
-                        const float k = (float) jlimit (0.0, 1.0, std::min (u * fw, (1.0 - u) * fw) + 0.5);   // bords adoucis
-                        const int g0 = (int) (34 + 46 * (1.0 - u) + 25 * (1.0 - v));   // métal sombre, plus clair près de l'arête
-                        // tranche opaque posée par-dessus (pixels prémultipliés : out = tranche * k + existant * (1 - k))
-                        auto mixc = [k] (int a, int b) { return (uint8) jlimit (0, 255, roundToInt ((float) a * k + (float) b * (1.0f - k))); };
+                        const float ka = (float) o.getAlpha() / 255.0f;
+                        PixelARGB m;
+                        m.setARGB (u8 (o.getAlpha() + px->getAlpha() * (1.0f - ka)), u8 (o.getRed() + px->getRed() * (1.0f - ka)),
+                                   u8 (o.getGreen() + px->getGreen() * (1.0f - ka)), u8 (o.getBlue() + px->getBlue() * (1.0f - ka)));
+                        *px = m;
+                    }
+            }
+
+            // ---------- 3) charnière : le talon plonge, une fente sombre s'ouvre, l'axe accroche la lumière ----------
+            {
+                Image::BitmapData bo (out, Image::BitmapData::readWrite);
+                const int yh = (int) std::round (dstQ[3].y);
+                const int x0 = (int) std::ceil (dstQ[3].x + 18 * sx), x1 = (int) std::floor (dstQ[2].x - 18 * sx);
+                const int gap = jmax (1, (int) std::round (3.5 * sy * lift));
+                for (int x = jmax (0, x0); x <= jmin (w - 1, x1); ++x)
+                {
+                    const float fx = (float) jmin (x - x0, x1 - x) / (float) (12 * sx);
+                    const float edgeK = jlimit (0.0f, 1.0f, fx);
+                    for (int k = -gap; k <= gap; ++k)                      // fente sombre à cheval sur l'arête du talon
+                    {
+                        const int y = yh + k;
+                        if (y < 0 || y >= h) continue;
+                        auto* px = (PixelARGB*) bo.getPixelPointer (x, y);
+                        const float a = (float) (0.75 * lift) * edgeK * (1.0f - std::abs ((float) k) / (float) (gap + 1));
                         PixelARGB o;
-                        o.setARGB (mixc (255, px->getAlpha()), mixc (jmin (255, g0 + 6), px->getRed()), mixc (g0, px->getGreen()), mixc (jmin (255, g0 + 4), px->getBlue()));
+                        o.setARGB (u8 (px->getAlpha() + (255 - px->getAlpha()) * a), u8 (px->getRed() * (1 - a)), u8 (px->getGreen() * (1 - a)), u8 (px->getBlue() * (1 - a)));
+                        *px = o;
+                    }
+                    // fin liseré clair : l'axe de la charnière éclairé juste sous la fente
+                    const int yl = yh + gap + 1;
+                    if (yl >= 0 && yl < h)
+                    {
+                        auto* px = (PixelARGB*) bo.getPixelPointer (x, yl);
+                        const float a = (float) (0.35 * lift) * edgeK;
+                        PixelARGB o;
+                        o.setARGB (u8 (px->getAlpha() + (255 - px->getAlpha()) * a), u8 (px->getRed() + (210 - px->getRed()) * a),
+                                   u8 (px->getGreen() + (208 - px->getGreen()) * a), u8 (px->getBlue() + (205 - px->getBlue()) * a));
                         *px = o;
                     }
                 }
             }
-            // ombre portée sous la pointe levée (lumière en haut à gauche -> ombre vers la droite / le bas)
-            const int ox = roundToInt (8.0 * sx * lift), oy = roundToInt (11.0 * sy * lift), rad = jmax (1, roundToInt (6.0 * sx));
+
+            // ---------- 4) ombre portée : décalage et flou proportionnels à la hauteur au-dessus du boîtier ----------
             std::vector<float> sh ((size_t) (w * h), 0.0f), tmp ((size_t) (w * h), 0.0f);
             {
-                const Image::BitmapData bp (plate, Image::BitmapData::readOnly);
+                const Image::BitmapData bp (out, Image::BitmapData::readOnly);
+                const double topY = dstQ[0].y, botY = dstQ[3].y;
                 for (int y = 0; y < h; ++y)
                     for (int x = 0; x < w; ++x)
                     {
-                        const int xs = x - ox, ys = y - oy;
+                        // le point du plateau qui projette ici est plus haut d'environ h (lumière en haut à gauche -> ombre en bas à droite)
+                        const double hgt = jlimit (0.0, 1.0, (botY - (double) y) / jmax (1.0, botY - topY)) * lift;
+                        const int xs = (int) std::round (x - 11.0 * sx * hgt), ys = (int) std::round (y - 15.0 * sy * hgt);
                         if (xs >= 0 && ys >= 0 && xs < w && ys < h)
-                            sh[(size_t) (y * w + x)] = (float) ((const PixelARGB*) bp.getPixelPointer (xs, ys))->getAlpha() / 255.0f;
+                            sh[(size_t) (y * w + x)] = (float) ((const PixelARGB*) bp.getPixelPointer (xs, ys))->getAlpha() / 255.0f * (float) (0.35 + 0.65 * hgt / jmax (1.0e-3, lift));
                     }
             }
+            const int rad = jmax (1, roundToInt ((2.5 + 5.0 * lift) * sx));
             const float norm = 1.0f / (float) (2 * rad + 1);
             for (int pass = 0; pass < 2; ++pass)      // flou boîte séparable, 2 passes (~ gaussien)
             {
@@ -220,11 +325,11 @@ namespace
                     }
                 }
             }
-            Image out (Image::ARGB, w, h, true);
+            Image res (Image::ARGB, w, h, true);
             {
-                const Image::BitmapData bp (plate, Image::BitmapData::readOnly);
-                Image::BitmapData bo (out, Image::BitmapData::writeOnly);
-                const float strength = (float) (0.55 * lift);
+                const Image::BitmapData bp (out, Image::BitmapData::readOnly);
+                Image::BitmapData bo (res, Image::BitmapData::writeOnly);
+                const float strength = (float) (0.62 * jmin (1.0, lift * 1.6));
                 for (int y = 0; y < h; ++y)
                     for (int x = 0; x < w; ++x)
                     {
@@ -232,14 +337,14 @@ namespace
                         const float pa = (float) pp.getAlpha() / 255.0f;
                         const float sa = sh[(size_t) (y * w + x)] * strength * (1.0f - pa);
                         PixelARGB o;   // prémultiplié : l'ombre noire n'ajoute que de l'alpha
-                        o.setARGB ((uint8) jlimit (0, 255, roundToInt ((pa + sa) * 255.0f)), pp.getRed(), pp.getGreen(), pp.getBlue());
+                        o.setARGB (u8 ((pa + sa) * 255.0f), pp.getRed(), pp.getGreen(), pp.getBlue());
                         *(PixelARGB*) bo.getPixelPointer (x, y) = o;
                     }
             }
-            return out;
+            return res;
         }
 
-        static PixelARGB sample (const Image::BitmapData& bd, int w, int h, float x, float y, float gain)
+        static PixelARGB sample (const Image::BitmapData& bd, int w, int h, float x, float y)
         {
             const int x0 = (int) std::floor (x), y0 = (int) std::floor (y);
             const float fx = x - (float) x0, fy = y - (float) y0;
@@ -249,21 +354,19 @@ namespace
                 return *(const PixelARGB*) bd.getPixelPointer (xx, yy);
             };
             const PixelARGB a = px (x0, y0), b = px (x0 + 1, y0), c = px (x0, y0 + 1), d = px (x0 + 1, y0 + 1);
-            auto mix = [&] (int ca, int cb, int cc, int cd, float k)
+            auto mix = [&] (int ca, int cb, int cc, int cd)
             {
                 const float t = (float) ca + ((float) cb - (float) ca) * fx, u = (float) cc + ((float) cd - (float) cc) * fx;
-                return (uint8) jlimit (0, 255, roundToInt ((t + (u - t) * fy) * k));
+                return u8 (t + (u - t) * fy);
             };
-            PixelARGB o;   // pixels prémultipliés : la couleur ne peut pas dépasser l'alpha
-            const uint8 al = mix (a.getAlpha(), b.getAlpha(), c.getAlpha(), d.getAlpha(), 1.0f);
-            o.setARGB (al, jmin (al, mix (a.getRed(), b.getRed(), c.getRed(), d.getRed(), gain)),
-                       jmin (al, mix (a.getGreen(), b.getGreen(), c.getGreen(), d.getGreen(), gain)),
-                       jmin (al, mix (a.getBlue(), b.getBlue(), c.getBlue(), d.getBlue(), gain)));
+            PixelARGB o;
+            o.setARGB (mix (a.getAlpha(), b.getAlpha(), c.getAlpha(), d.getAlpha()), mix (a.getRed(), b.getRed(), c.getRed(), d.getRed()),
+                       mix (a.getGreen(), b.getGreen(), c.getGreen(), d.getGreen()), mix (a.getBlue(), b.getBlue(), c.getBlue(), d.getBlue()));
             return o;
         }
 
         Image down, src;
-        Rectangle<int> box { 0, 0, kW, kH };
+        Rectangle<float> box { 0, 0, (float) kW, (float) kH };
         float scale = -1.0f;
         std::array<Image, kFrames> frames;
     };
@@ -286,11 +389,7 @@ namespace
         ed->setScaleIndex (r == 904 ? -1 : r - 901);
     }
 
-    Point<float> rangeNumberPos (int i)
-    {
-        const float a = degreesToRadians (kRangeA0 + kRangeSpan * (float) i / (float) (crycat::kNumRanges - 1));
-        return kKnob + Point<float> (std::sin (a), -std::cos (a)) * (kKnobR + 24.0f);
-    }
+    Point<float> rangeNumberPos (int i) { return kNumPos[jlimit (0, crycat::kNumRanges - 1, i)]; }
 }
 
 //==============================================================================
@@ -323,7 +422,7 @@ public:
         const float fpos = jlimit (0.0f, 1.0f, drawnPedal) * (float) (kFrames - 1);
         const int f0 = jlimit (0, kFrames - 1, (int) std::floor (fpos)), f1 = jmin (kFrames - 1, f0 + 1);
         const float fr = fpos - (float) f0;
-        const auto tb = r (treadle.designBounds().toFloat());
+        const auto tb = r (treadle.designBounds());
         g.setOpacity (1.0f);
         g.drawImage (treadle.frame (f0), tb);
         if (fr > 0.02f && f1 != f0) { g.setOpacity (fr); g.drawImage (treadle.frame (f1), tb); g.setOpacity (1.0f); }
@@ -331,36 +430,18 @@ public:
         // ---- sélecteur RANGE : repère gravé + numéro choisi éclairé en ambre ----
         {
             const float ang = rangeAngle (drawnRange);
-            const Point<float> dir (std::sin (ang), -std::cos (ang));
-            const auto c = r (kKnob);
-            const auto a = c + dir * (kCapR * 0.28f * s), b = c + dir * (kCapR * 0.88f * s);
-            g.setColour (Colours::white.withAlpha (0.5f)); g.drawLine ({ a.translated (-0.8f * s, -0.8f * s), b.translated (-0.8f * s, -0.8f * s) }, 2.6f * s);
-            g.setColour (Colour (0xe0201a1a)); g.drawLine ({ a, b }, 3.4f * s);
-            // pointe du repère sur la jupe moletée
-            const auto t0 = c + dir * (kCapR * 1.02f * s), t1 = c + dir * (kKnobR * 0.97f * s);
-            g.setColour (kInk.withAlpha (0.9f)); g.drawLine ({ t0, t1 }, 3.0f * s);
-
+            drawPointer (g, kKnobCap, kCapR, ang, 4.2f);
             const auto np = r (rangeNumberPos (drawnRange));
             g.setGradientFill (ColourGradient (kAmber.withAlpha (0.35f), np.x, np.y, kAmber.withAlpha (0.0f), np.x + 18.0f * s, np.y, true));
             g.fillEllipse (np.x - 18.0f * s, np.y - 18.0f * s, 36.0f * s, 36.0f * s);
             g.setColour (kAmberHi);
-            g.setFont (Font (FontOptions (typeface).withHeight (17.0f * 1.36f * s)));
+            g.setFont (Font (FontOptions (typeface).withHeight (16.6f * 1.40f * s)));
             g.drawText (String (drawnRange + 1), Rectangle<float> (np.x - 15.0f * s, np.y - 15.0f * s, 30.0f * s, 30.0f * s), Justification::centred);
         }
 
         // ---- Q / PURR / BOOST ----
         for (int i = 0; i < 3; ++i)
-        {
-            const float ang = degreesToRadians (-135.0f + 270.0f * drawnSmall[i]);
-            const Point<float> dir (std::sin (ang), -std::cos (ang));
-            const auto c = r (kSmall[i]);
-            g.setColour (Colours::white.withAlpha (0.45f));
-            g.drawLine ({ c + dir * (kSmallCapR * 0.30f * s) + Point<float> (-0.7f, -0.7f) * s, c + dir * (kSmallCapR * 0.90f * s) + Point<float> (-0.7f, -0.7f) * s }, 2.0f * s);
-            g.setColour (Colour (0xe0201a1a));
-            g.drawLine ({ c + dir * (kSmallCapR * 0.30f * s), c + dir * (kSmallCapR * 0.90f * s) }, 2.8f * s);
-            g.setColour (kInk.withAlpha (0.85f));
-            g.drawLine ({ c + dir * (kSmallCapR * 1.04f * s), c + dir * (kSmallR * 0.96f * s) }, 2.4f * s);
-        }
+            drawPointer (g, kSmallCap[i], kSmallCapR, degreesToRadians (-135.0f + 270.0f * drawnSmall[i]), 3.4f);
 
         // ---- inverseur MAN / AUTO ----
         g.drawImage ((drawnAuto ? tgR : tgL).get (ps), r (kToggle));
@@ -384,7 +465,7 @@ public:
         drag = Drag::None;
         if (kScreen.contains (p)) { showPresetMenu(); return; }
         for (int i = 0; i < crycat::kNumRanges; ++i)          // clic sur un numéro : plage directe
-            if (p.getDistanceFrom (rangeNumberPos (i)) < 15.0f) { proc.setParamValue ("range", (float) i); return; }
+            if (p.getDistanceFrom (rangeNumberPos (i)) < 13.0f) { proc.setParamValue ("range", (float) i); return; }
         if (p.getDistanceFrom (kKnob) < kKnobR) { drag = Drag::Knob; dragStartY = p.y; dragStartRange = currentRange(); return; }
         for (int i = 0; i < 3; ++i)
             if (p.getDistanceFrom (kSmall[i]) < kSmallR * 1.15f)
@@ -470,8 +551,22 @@ private:
     bool param (const char* id) const { return proc.apvts.getRawParameterValue (id)->load() > 0.5f; }
     static float rangeAngle (int i)
     {
-        i = jlimit (0, crycat::kNumRanges - 1, i);
-        return degreesToRadians (kRangeA0 + kRangeSpan * (float) i / (float) (crycat::kNumRanges - 1));
+        const auto d = rangeNumberPos (i) - kKnobCap;
+        return std::atan2 (d.x, -d.y);
+    }
+
+    // repère gravé : trait noir mat avec un fin liseré clair côté lumière (comme sur le design)
+    void drawPointer (Graphics& g, Point<float> c0, float capR, float ang, float width)
+    {
+        const Point<float> dir (std::sin (ang), -std::cos (ang));
+        const auto c = r (c0);
+        const auto a = c + dir * (capR * 0.30f * s), b = c + dir * (capR * 0.90f * s);
+        const Point<float> off (-0.6f * s, -0.6f * s);
+        g.setColour (Colours::white.withAlpha (0.35f));
+        g.drawLine ({ a + off, b + off }, (width + 0.6f) * s);
+        g.setColour (Colour (0xf2141212));
+        Path p; p.startNewSubPath (a); p.lineTo (b);
+        g.strokePath (p, PathStrokeType (width * s, PathStrokeType::curved, PathStrokeType::rounded));
     }
 
     // LED : bille sombre éteinte, cœur blanc chaud + halo ambré allumée
@@ -494,7 +589,7 @@ private:
     void drawScreen (Graphics& g)
     {
         const auto sc = r (kScreen);
-        g.setColour (kScreenBg); g.fillRoundedRectangle (sc, 4.0f * s);
+        g.setColour (kScreenBg); g.fillRoundedRectangle (sc, kScreenRadius * s);
         auto st = proc.currentSettings();
         const float pos = jlimit (0.0f, 1.0f, drawnPedal);
         const float alpha = drawnOn ? 1.0f : 0.42f;
@@ -618,11 +713,11 @@ private:
         if (std::abs (ped - drawnPedal) > 0.002f)
         {
             drawnPedal = ped; screen = true;
-            repaint (r (treadle.designBounds().toFloat()).toNearestInt().expanded (2));
+            repaint (r (treadle.designBounds()).toNearestInt().expanded (2));
         }
         if (rg != drawnRange)
         {
-            const float h = kKnobR + 50.0f;
+            const float h = kKnobR + 32.0f;
             repaint (r (Rectangle<float> (kKnob.x - h, kKnob.y - h, 2 * h, 2 * h)).toNearestInt().expanded (2));
             drawnRange = rg; screen = true;
         }
@@ -694,7 +789,7 @@ private:
             m.addItem (33, "Invert pedal direction", true, param ("invert"));
             PopupMenu glide;
             const float gl = proc.apvts.getRawParameterValue ("smooth")->load();
-            for (int i = 0; i < 6; ++i) { const int ms[6] = { 0, 10, 20, 40, 80, 150 }; glide.addItem (61 + i, String (ms[i]) + " ms", true, std::abs (gl - (float) ms[i]) < 1.0f); }
+            for (int i = 0; i < 6; ++i) { const int ms[6] = { 0, 8, 15, 30, 60, 120 }; glide.addItem (61 + i, String (ms[i]) + " ms", true, std::abs (gl - (float) ms[i]) < 1.0f); }
             m.addSubMenu ("Pedal glide (smoothing)", glide);
             m.addSeparator();
             m.addSectionHeader ("Auto-engage");
@@ -713,7 +808,7 @@ private:
         {
             if (sp == nullptr || res == 0) return;
             auto& pr = sp->proc;
-            const int glideMs[6] = { 0, 10, 20, 40, 80, 150 }, relMs[5] = { 150, 300, 400, 800, 1500 };
+            const int glideMs[6] = { 0, 8, 15, 30, 60, 120 }, relMs[5] = { 150, 300, 400, 800, 1500 };
             switch (res)
             {
                 case 11: pr.startMidiLearn (MidiTarget::AutoSwitch); break;
