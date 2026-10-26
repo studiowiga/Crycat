@@ -820,8 +820,8 @@ private:
             m.addSectionHeader ("Expression pedal (" + proc.getMidiDescription (MidiTarget::Pedal) + ")");
             m.addItem (31, "MIDI learn pedal controller");
             m.addItem (32, "Reset to CC 11");
-            m.addItem (35, "Calibrate (sweep heel <-> toe for 6 s)");
-            m.addItem (34, "Reset heel / toe calibration");
+            m.addItem (35, "Calibrate (sweep heel <-> toe for 6 s)  -  " + proc.calibrationDescription());
+            m.addItem (34, "Reset pedal calibration");
             m.addItem (33, "Invert pedal direction", true, param ("invert"));
             PopupMenu glide;
             const float gl = proc.apvts.getRawParameterValue ("smooth")->load();
@@ -854,7 +854,7 @@ private:
                 case 31: pr.startMidiLearn (MidiTarget::Pedal); break;
                 case 32: pr.clearMidi (MidiTarget::Pedal); break;
                 case 33: pr.togglePedalSwitch ("invert"); break;
-                case 34: pr.setParamValue ("heel", 0.0f); pr.setParamValue ("toe", 1.0f); break;
+                case 34: pr.resetCalibration(); break;
                 case 35: pr.startCalibration(); break;
                 case 41: pr.setParamValue ("latch", 0.0f); break;
                 case 42: pr.setParamValue ("latch", 1.0f); break;

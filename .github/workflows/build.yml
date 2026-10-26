@@ -1,4 +1,4 @@
-name: Build CRYCAT VST3
+name: Build Crycat VST3
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
       - name: Upload VST3
         uses: actions/upload-artifact@v4
         with:
-          name: CRYCAT-VST3-Windows
+          name: Crycat-VST3-Windows
           path: build/Crycat_artefacts/Release/VST3/
           if-no-files-found: error
 
@@ -31,12 +31,12 @@ jobs:
       - name: Signature locale (ad hoc) et archive
         run: |
           cd build/Crycat_artefacts/Release/VST3
-          xattr -cr CRYCAT.vst3
-          codesign --force --deep --sign - CRYCAT.vst3
-          codesign --verify --deep --strict CRYCAT.vst3
-          ditto -c -k --sequesterRsrc --keepParent CRYCAT.vst3 "$GITHUB_WORKSPACE/CRYCAT-VST3-macOS.zip"
+          xattr -cr Crycat.vst3
+          codesign --force --deep --sign - Crycat.vst3
+          codesign --verify --deep --strict Crycat.vst3
+          ditto -c -k --sequesterRsrc --keepParent Crycat.vst3 "$GITHUB_WORKSPACE/Crycat-VST3-macOS.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: CRYCAT-VST3-macOS
-          path: CRYCAT-VST3-macOS.zip
+          name: Crycat-VST3-macOS
+          path: Crycat-VST3-macOS.zip
           if-no-files-found: error

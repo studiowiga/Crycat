@@ -42,8 +42,8 @@ AudioProcessorValueTreeState::ParameterLayout CrycatProcessor::createLayout()
                                                         NormalisableRange<float> (0.0f, 250.0f, 0.0f, 0.5f), 15.0f, AudioParameterFloatAttributes().withLabel ("ms")));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "autooff", 1 }, "Auto-Engage Release (heel rest time)",
                                                         NormalisableRange<float> (100.0f, 2000.0f, 0.0f, 0.5f), 400.0f, AudioParameterFloatAttributes().withLabel ("ms")));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "heel", 1 }, "MIDI Pedal Calibration Heel (min)", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "toe", 1 },  "MIDI Pedal Calibration Toe (max)",  NormalisableRange<float> (0.0f, 1.0f), 1.0f));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "heel", 1 }, "Pedal Calibration Heel (min)", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "toe", 1 },  "Pedal Calibration Toe (max)",  NormalisableRange<float> (0.0f, 1.0f), 1.0f));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "invert", 1 }, "MIDI Pedal Invert", false));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "pc", 1 }, "Respond to MIDI Program Change (PC 1-10 = presets)", true));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "latch", 1 }, "MIDI Switches Latching (127 = on / 0 = off)", false));
@@ -121,16 +121,43 @@ void CrycatProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
 void CrycatProcessor::parameterChanged (const String& id, float v)
 {
-    if (id == "pedal") pedalLive = v;
+    if (id == "pedal") pedalLive = mapPedal (v, false);
 }
 
-// position MIDI brute (0..1) -> position pédale, avec calibration talon / pointe et inversion
-float CrycatProcessor::mapPedal (float raw) const
+// position brute (0..1) -> position pédale (même logique que Wharry 1.6.0) :
+//  1. plage de la pédale : calibration manuelle (talon / pointe) si elle a été faite, sinon plage apprise
+//     automatiquement sur le MIDI reçu (une M-Audio EX-P envoie souvent ~2..116 au lieu de 0..127) ;
+//  2. petite zone morte aux deux butées : talon = exactement 0, pointe = exactement 100 % ;
+//  3. inversion éventuelle (MIDI seulement).
+float CrycatProcessor::mapPedal (float raw, bool fromMidi) const
+{
+    float v = raw;
+    if (fromMidi)
+    {
+        float lo = pHeel->load(), hi = pToe->load();
+        const bool manual = lo > 0.001f || hi < 0.999f;
+        if (! manual && autoMax.load() - autoMin.load() > 0.4f) { lo = autoMin.load(); hi = autoMax.load(); }
+        v = hi > lo + 0.01f ? (raw - lo) / (hi - lo) : raw;
+    }
+    constexpr float dz = 0.02f;
+    v = jlimit (0.0f, 1.0f, (v - dz) / (1.0f - 2.0f * dz));
+    return (fromMidi && pInvert->load() > 0.5f) ? 1.0f - v : v;
+}
+
+void CrycatProcessor::resetCalibration()
+{
+    calibUntil = 0;
+    autoMin = 1.0f; autoMax = 0.0f;
+    setParamValue ("heel", 0.0f); setParamValue ("toe", 1.0f);
+}
+
+String CrycatProcessor::calibrationDescription() const
 {
     const float lo = pHeel->load(), hi = pToe->load();
-    float v = hi > lo + 0.01f ? (raw - lo) / (hi - lo) : raw;
-    v = jlimit (0.0f, 1.0f, v);
-    return pInvert->load() > 0.5f ? 1.0f - v : v;
+    auto cc = [] (float v) { return String (roundToInt (v * 127.0f)); };
+    if (lo > 0.001f || hi < 0.999f) return "calibrated " + cc (lo) + " - " + cc (hi);
+    if (autoMax.load() - autoMin.load() > 0.4f) return "auto " + cc (autoMin.load()) + " - " + cc (autoMax.load());
+    return "auto";
 }
 
 // ------------------------------------------------------------------ MIDI
@@ -160,7 +187,10 @@ void CrycatProcessor::handleMidiMessage (const MidiMessage& m)
                 if (v > calMax.load()) calMax = v;
             }
             pedalMsb = v;
-            pedalLive = mapPedal ((float) v / 127.0f);
+            const float raw = (float) v / 127.0f;
+            if (raw < autoMin.load()) autoMin = raw;
+            if (raw > autoMax.load()) autoMax = raw;
+            pedalLive = mapPedal (raw);
         }
         else if (ccPedal.load() < 32 && c == ccPedal.load() + 32 && pedalMsb >= 0)
         {
@@ -342,6 +372,8 @@ void CrycatProcessor::getStateInformation (MemoryBlock& dest)
     st.setProperty ("noteFs", noteFs.load(), nullptr);
     st.setProperty ("uiScaleIdx", uiScaleIdx.load(), nullptr);
     st.setProperty ("factory", currentFactory, nullptr);
+    st.setProperty ("autoMin", (double) autoMin.load(), nullptr);
+    st.setProperty ("autoMax", (double) autoMax.load(), nullptr);
     if (auto xml = st.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -359,7 +391,9 @@ void CrycatProcessor::setStateInformation (const void* data, int size)
             noteFs   = (int) st.getProperty ("noteFs", -1);
             uiScaleIdx = jlimit (-1, 2, (int) st.getProperty ("uiScaleIdx", -1));
             currentFactory = jlimit (0, kNumFactory - 1, (int) st.getProperty ("factory", 0));
-            pedalLive = pPedal->load();
+            autoMin = (float) (double) st.getProperty ("autoMin", 1.0);
+            autoMax = (float) (double) st.getProperty ("autoMax", 0.0);
+            pedalLive = mapPedal (pPedal->load(), false);
             autoHeld = false; fsHeld = false;
         }
 }

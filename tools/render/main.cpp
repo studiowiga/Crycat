@@ -33,6 +33,20 @@ int main (int argc, char** argv)
     shot ("crycat_100pc_milieu", 0.55f, 3, 0.55f, 0.3f, 0.2f, false, true);
     shot ("crycat_100pc_pointe", 1.0f, 2, 0.4f, 0.2f, 0.0f, true, true);
     shot ("crycat_100pc_bypass", 0.7f, 5, 0.8f, 0.35f, 0.35f, false, false);
+    // test pédale : M-Audio EX-P qui n'envoie que 2..116 en CC 11
+    {
+        auto sendCC = [&] (int v)
+        {
+            AudioBuffer<float> b (2, 256); MidiBuffer m; m.addEvent (MidiMessage::controllerEvent (1, 11, v), 0);
+            proc.processBlock (b, m);
+            for (int k = 0; k < 80; ++k) { MidiBuffer e; b.clear(); proc.processBlock (b, e); }
+            return proc.getPedalShown();
+        };
+        const float a = sendCC (2); const float c = sendCC (116);
+        std::printf ("test pédale 2..116 : talon %.3f, pointe %.3f (%s)\n", a, c, proc.calibrationDescription().toRawUTF8());
+        const float m = sendCC (59);
+        std::printf ("test pédale mi-course (59) : %.3f\n", m);
+    }
     ed.reset();
     return 0;
 }

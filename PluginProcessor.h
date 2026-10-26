@@ -30,7 +30,7 @@ public:
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
-    const juce::String getName() const override { return "CRYCAT"; }
+    const juce::String getName() const override { return "Crycat"; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override { return 0.05; }
@@ -83,7 +83,7 @@ private:
     void parameterChanged (const juce::String&, float) override;
     void handleAsyncUpdate() override;
     void handleMidiMessage (const juce::MidiMessage&);
-    float mapPedal (float raw01) const;
+    float mapPedal (float raw01, bool fromMidi = true) const;
     crycat::Settings settingsAt (int offsetInBlock);   // thread audio
 
     crycat::Engine engine;
@@ -101,6 +101,11 @@ private:
     juce::int64 sampleClock = 0, lastPedalChange = 0;
     float lastPedalTarget = -1.0f;
     std::atomic<bool> autoHeld { false }, fsHeld { false }, calibPending { false };
+    std::atomic<float> autoMin { 1.0f }, autoMax { 0.0f };          // plage réellement envoyée par la pédale MIDI (apprise automatiquement)
+public:
+    void resetCalibration();
+    juce::String calibrationDescription() const;
+private:
 
     // changements demandés depuis le thread audio (MIDI) et appliqués sur le thread de la fenêtre
     std::atomic<int> pendingFactory { -1 }, pendingActive { -1 }, pendingAuto { -1 };

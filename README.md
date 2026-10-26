@@ -23,5 +23,5 @@ reflet mobile, ombre portée selon la hauteur et charnière.
 Captures réelles de la fenêtre : `tools/render` (outil Linux, `design/renders/`).
 
 ## Build
-GitHub Actions (`.github/workflows/build.yml`) : artefacts `CRYCAT-VST3-Windows` et `CRYCAT-VST3-macOS`.
+GitHub Actions (`.github/workflows/build.yml`) : artefacts `Crycat-VST3-Windows` et `Crycat-VST3-macOS`.
 Tests du moteur audio : `g++ -O2 -std=c++17 tests/test_dsp.cpp -o test_dsp && ./test_dsp`
