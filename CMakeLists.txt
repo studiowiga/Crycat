@@ -29,7 +29,7 @@ endif()
 # visuel de la pédale intégré au plugin (aucun fichier externe à l'exécution)
 juce_add_binary_data(CrycatAssets SOURCES
   background.png treadle_down.png
-  fs_up_off.png fs_up_on.png fs_down_off.png fs_down_on.png led_glow.png toggle_l.png toggle_m.png toggle_r.png
+  fs_off.png fs_on.png led_glow.png toggle_l.png toggle_m.png toggle_r.png
   fonts/Poppins-Medium.ttf fonts/Poppins-Bold.ttf)
 
 if(APPLE)

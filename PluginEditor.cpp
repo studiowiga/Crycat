@@ -24,8 +24,11 @@ namespace
     const Rectangle<float> kScreen (656.0f, 199.2f, 196.7f, 226.2f);
     constexpr float kScreenRadius = 6.5f;
     // commandes rendues par tools/controls_art.py (tools/controls_layout.txt)
-    const Rectangle<float> kFs (603.0f, 653.8f, 136.0f, 136.0f);           // footswitch (sprite, ombre comprise)
-    const Point<float> kFsC (671.0f, 721.8f);  constexpr float kFsHitR = 46.0f;
+    // footswitch d'ECHOFLEX (photo réelle, mise à l'échelle 0.8657) : même comportement qu'Echoflex
+    const Rectangle<float> kFs (586.0f, 636.8f, 170.0f, 170.0f);           // footswitch (sprite, ombre comprise)
+    const Point<float> kFsC (671.0f, 721.8f);
+    constexpr float kFsHitR = 47.6f;                                        // = footR d'Echoflex (55) x 0.8657
+    constexpr float kFsPressR = 25.7f;                                      // disque assombri pendant l'appui (Echoflex : footR x 0.54)
     const Point<float> kFsLed (772.4f, 724.8f);
     const Rectangle<float> kLedGlow (694.4f, 646.8f, 156.0f, 156.0f);      // façade éclairée par la LED
     const Rectangle<float> kToggle (753.4f, 101.7f, 84.0f, 60.0f);         // inverseur MAN / AUTO (sprite, ombre comprise)
@@ -429,10 +432,8 @@ public:
     explicit PedalView (CrycatProcessor& p) : proc (p)
     {
         bg.src    = loadPng (BinaryData::background_png, BinaryData::background_pngSize);
-        fsUpOff.src   = loadPng (BinaryData::fs_up_off_png, BinaryData::fs_up_off_pngSize);
-        fsUpOn.src    = loadPng (BinaryData::fs_up_on_png, BinaryData::fs_up_on_pngSize);
-        fsDownOff.src = loadPng (BinaryData::fs_down_off_png, BinaryData::fs_down_off_pngSize);
-        fsDownOn.src  = loadPng (BinaryData::fs_down_on_png, BinaryData::fs_down_on_pngSize);
+        fsOff.src     = loadPng (BinaryData::fs_off_png, BinaryData::fs_off_pngSize);
+        fsOn.src      = loadPng (BinaryData::fs_on_png, BinaryData::fs_on_pngSize);
         ledGlow.src   = loadPng (BinaryData::led_glow_png, BinaryData::led_glow_pngSize);
         tgL.src   = loadPng (BinaryData::toggle_l_png, BinaryData::toggle_l_pngSize);
         tgM.src   = loadPng (BinaryData::toggle_m_png, BinaryData::toggle_m_pngSize);
@@ -491,15 +492,18 @@ public:
             g.setOpacity (1.0f);
         }
         {
-            const bool down = footDown();
-            auto& offImg = down ? fsDownOff : fsUpOff;
-            auto& onImg  = down ? fsDownOn : fsUpOn;
-            g.drawImage (offImg.get (ps), r (kFs));
+            g.drawImage (fsOff.get (ps), r (kFs));
             if (ledLevel > 0.003f)    // flanc de l'écrou tourné vers la LED : reflet ambre
             {
                 g.setOpacity (jmin (1.0f, ledLevel));
-                g.drawImage (onImg.get (ps), r (kFs));
+                g.drawImage (fsOn.get (ps), r (kFs));
                 g.setOpacity (1.0f);
+            }
+            if (pressed)              // comme Echoflex : le bouton s'assombrit tant qu'on appuie
+            {
+                const auto c = r (kFsC); const float pr = kFsPressR * s;
+                g.setColour (Colours::black.withAlpha (0.25f));
+                g.fillEllipse (c.x - pr, c.y - pr, pr * 2.0f, pr * 2.0f);
             }
         }
         drawLed (g, kFsLed, ledLevel);
@@ -525,7 +529,7 @@ public:
                 return;
             }
         if (kToggleHit.contains (p)) { proc.togglePedalSwitch ("auto"); return; }   // l'animation suit le paramètre (timer)
-        if (kFsC.getDistanceFrom (p) < kFsHitR) { pressed = true; selfToggle = true; footDownUntil = Time::getMillisecondCounterHiRes() + 110.0; proc.togglePedalSwitch ("active"); repaint (r (kFs).toNearestInt().expanded (4)); return; }
+        if (kFsC.getDistanceFrom (p) < kFsHitR) { pressed = true; proc.togglePedalSwitch ("active"); repaint (r (kFs).toNearestInt().expanded (4)); return; }   // Echoflex : bascule à l'appui
         if (kPlate.contains (p))
         {
             drag = Drag::Pedal; dragStartY = p.y;
@@ -560,7 +564,7 @@ public:
         if (drag == Drag::Pedal) if (auto* par = proc.apvts.getParameter ("pedal")) par->endChangeGesture();
         if (drag >= Drag::Small0) if (auto* par = proc.apvts.getParameter (kSmallId[(int) drag - (int) Drag::Small0])) par->endChangeGesture();
         drag = Drag::None;
-        if (pressed) { pressed = false; repaint (r (kFs).toNearestInt().expanded (4)); }   // le timer garde l'appui visible au moins 110 ms
+        if (pressed) { pressed = false; repaint (r (kFs).toNearestInt().expanded (4)); }
     }
 
     void mouseDoubleClick (const MouseEvent& e) override
@@ -663,9 +667,6 @@ private:
         g.setGradientFill (sp);
         g.fillEllipse (c.x - lr * 0.74f, c.y - lr * 0.80f, lr * 0.72f, lr * 0.56f);
     }
-
-    // footswitch enfoncé : tant que le clic est tenu (au moins 110 ms), et brièvement quand le MIDI / l'automation le bascule
-    bool footDown() const { return pressed || Time::getMillisecondCounterHiRes() < footDownUntil; }
 
     // écran ambre : plage + état, courbe de réponse en direct, fréquence centrale, course de la pédale, ligne d'état
     void drawScreen (Graphics& g)
@@ -814,14 +815,6 @@ private:
             drawnRange = rg; screen = true;
         }
         const double nowMs = Time::getMillisecondCounterHiRes();
-        const bool activeP = param ("active");
-        if (drawnActiveP >= 0 && (int) activeP != drawnActiveP)
-        {
-            if (! selfToggle) footDownUntil = nowMs + 120.0;      // basculé par le MIDI ou l'automation : on voit le footswitch s'enfoncer
-            selfToggle = false;
-            repaint (r (kFs).toNearestInt().expanded (4));
-        }
-        drawnActiveP = (int) activeP;
         if (drawnAuto != autoM && drawnStarted) toggleMidUntil = nowMs + 55.0;
         if (autoM != drawnAuto || on != drawnOn || armed != drawnArmed)
         {
@@ -831,11 +824,9 @@ private:
         drawnStarted = true;
         const bool toggleMoving = nowMs < toggleMidUntil;
         if (toggleMoving != drawnToggleMoving) { drawnToggleMoving = toggleMoving; repaint (r (kToggle).toNearestInt().expanded (3)); }
-        const bool fd = footDown();
-        if (fd != drawnFootDown) { drawnFootDown = fd; repaint (r (kFs).toNearestInt().expanded (4)); }
-        // LED : montée rapide, extinction un peu plus lente (filament froid / phosphore) ; veille AUTO = faible lueur
+        // LED (comme Echoflex) : allumage / extinction en fondu (0.45 / 0.28 par image) ; veille AUTO = faible lueur
         const float ledTarget = on ? 1.0f : (armed ? 0.10f : 0.0f);
-        ledLevel += (ledTarget - ledLevel) * (ledTarget > ledLevel ? 0.55f : 0.30f);
+        ledLevel += (ledTarget - ledLevel) * (ledTarget > ledLevel ? 0.45f : 0.28f);
         if (std::abs (ledLevel - ledTarget) < 0.003f) ledLevel = ledTarget;
         if (std::abs (ledLevel - drawnLed) > 0.003f)
         {
@@ -948,7 +939,7 @@ private:
     }
 
     CrycatProcessor& proc;
-    ScaledCache bg, fsUpOff, fsUpOn, fsDownOff, fsDownOn, ledGlow, tgL, tgM, tgR;
+    ScaledCache bg, fsOff, fsOn, ledGlow, tgL, tgM, tgR;
     TreadleWarp treadle;
     Typeface::Ptr typeface, typefaceBold;
     float s = kDefaultScale * kRefH / (float) kH;
@@ -956,10 +947,9 @@ private:
     Drag drag = Drag::None;
     float dragStartY = 0, dragStartVal = 0;
     int dragStartRange = 0;
-    bool pressed = false, selfToggle = false, drawnStarted = false, drawnToggleMoving = false, drawnFootDown = false;
-    double footDownUntil = 0.0, toggleMidUntil = 0.0;
+    bool pressed = false, drawnStarted = false, drawnToggleMoving = false;
+    double toggleMidUntil = 0.0;
     float ledLevel = 0.0f, drawnLed = -1.0f;
-    int drawnActiveP = -1;
 
     float drawnPedal = -1.0f, drawnSmall[3] = { -1.0f, -1.0f, -1.0f };
     int drawnRange = -1;

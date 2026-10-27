@@ -1,3 +1,3 @@
-fs centre (671.0, 721.8) sprite 136.0 x 136.0  -> rect 603.00 653.80 136.0 136.0
+fs (Echoflex) centre (671.0, 721.8) sprite 170.0 x 170.0  -> rect 586.00 636.80 170.0 170.0  echelle 0.8657  bouton r 30.3  appui r 25.7
 toggle pivot (795.4, 129.7) sprite 84.0 x 60.0 -> rect 753.40 101.70 84.0 60.0
 led centre (772.4, 724.8) glow rect 694.40 646.80 156.0 156.0

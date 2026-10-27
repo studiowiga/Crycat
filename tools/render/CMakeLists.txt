@@ -6,7 +6,7 @@ add_subdirectory(${JUCE_DIR} JUCE)
 set(W ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 juce_add_binary_data(CrycatAssets SOURCES
   ${W}/background.png ${W}/treadle_down.png
-  ${W}/fs_up_off.png ${W}/fs_up_on.png ${W}/fs_down_off.png ${W}/fs_down_on.png ${W}/led_glow.png ${W}/toggle_l.png ${W}/toggle_m.png ${W}/toggle_r.png
+  ${W}/fs_off.png ${W}/fs_on.png ${W}/led_glow.png ${W}/toggle_l.png ${W}/toggle_m.png ${W}/toggle_r.png
   ${W}/fonts/Poppins-Medium.ttf ${W}/fonts/Poppins-Bold.ttf)
 juce_add_console_app(CrycatRender PRODUCT_NAME "CrycatRender")
 target_sources(CrycatRender PRIVATE main.cpp ${W}/PluginProcessor.cpp ${W}/PluginEditor.cpp)

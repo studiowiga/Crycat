@@ -7,7 +7,7 @@ au format **pédale double** (fenêtre aux hauteurs de Ring Think : 486 x 495 pa
 - **RANGE** : 6 plages (1 Low / 7 cordes, 2 Dark, 3 GCB95, 4 Vintage V847, 5 Bright, 6 Shriek)
 - **Q** (résonance, de large à vocal), **PURR** (saturation de l'inducteur / grain), **BOOST** (0 à +15 dB)
 - Inverseur **MAN / AUTO** : en AUTO, la wah s'enclenche dès que la pédale quitte le talon et se coupe après un repos au talon (délai réglable)
-- Footswitch ON / OFF avec LED, bypass sans clic
+- Footswitch ON / OFF (celui d'Echoflex) avec LED, bypass sans clic
 - Pédale d'expression MIDI : **CC 11** par défaut (MIDI learn), calibration automatique talon / pointe, inversion ;
   aucune saccade : rampe linéaire sur l'intervalle mesuré entre deux CC, glissé à 2 pôles, fréquence / Q / Purr / Boost lissés, CC 14 bits accepté
 - Compatible **M-Vave Chocolate Plus** : MIDI learn des footswitches (CC ou note), mode momentané ou à accrochage (127 / 0),
@@ -21,7 +21,8 @@ repères, LED et levier retirés, textes corrigés, logement sombre sous le plat
 (images 2x pour les écrans HiDPI) et `tools/layout.txt`. Le plugin calcule la bascule du plateau en perspective, avec tranches,
 reflet mobile, ombre portée selon la hauteur et charnière.
 `python3 tools/controls_art.py` rend en 3D (champ de hauteurs, ombres par lancer de rayons, lumière unique en haut à gauche)
-l'inverseur MAN / AUTO (3 positions), le footswitch (relâché / enfoncé, LED éteinte / allumée) et la façade éclairée par la LED.
+l'inverseur MAN / AUTO (3 positions) et la façade éclairée par la LED ; le footswitch est celui d'Echoflex (photo réelle,
+`design/echoflex_footswitch_source.png`), avec le même fonctionnement (bascule à l'appui, bouton assombri tant qu'on appuie).
 Captures réelles de la fenêtre : `tools/render` (outil Linux, `design/renders/`).
 
 ## Build

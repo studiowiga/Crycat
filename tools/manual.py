@@ -124,7 +124,7 @@ T = {
    ["5", "Q", "Resonance of the peak, from wide and smooth (Q 2) to very vocal (Q 14). Default 40 % (Q about 4.4, the original Cry Baby)."],
    ["6", "PURR", "Inductor saturation and input grit (default 20 %)."],
    ["7", "BOOST", "Output gain, 0 to +15 dB (default 0 dB)."],
-   ["8", "Footswitch", "Effect ON / OFF, click-free crossfade. The switch visibly goes down when pressed, also when switched by MIDI or automation."],
+   ["8", "Footswitch", "Effect ON / OFF, click-free crossfade. Same footswitch and behaviour as Echoflex: it switches as soon as you press it and the cap darkens while held."],
    ["9", "LED", "Amber 3 mm LED in a chrome bezel: fades in when the wah is active (and lights the panel around it); glows faintly in AUTO while waiting for the pedal to move."],
    ["10", "IN", "Input jack (right side)."],
    ["11", "OUT", "Output jack (left side)."]],
@@ -166,7 +166,7 @@ T = {
        ["1.1.0", "New user design; treadle tilt with lighting, visible edges, height-dependent shadow and hinge detail; no more stepping with MIDI expression pedals (adaptive ramp + 2-stage glide, 14-bit CC); window 486 x 495"],
        ["1.1.1", "Treadle lighting like Wharry (face turns towards / away from the light, sliding reflection, contact shadow when flat), IN / OUT aligned with the jacks, right-hand screws removed, treadle positions precomputed in the background (no freeze)"],
        ["1.2.0", "Expression pedal range learnt automatically (exact 0 / 100 % with pedals that send e.g. 2-116), end dead zones; plugin renamed Crycat in the DAW"],
-       ["1.3.0", "Realistic controls, all lit by the same top-left light: MAN / AUTO toggle with a mid position while it flips, footswitch rendered in 3D with a visible press (mouse, MIDI and automation), 3 mm amber LED with chrome bezel that fades in / out and really lights the panel around it"]],
+       ["1.3.0", "Realistic controls, all lit by the same top-left light: MAN / AUTO toggle with a mid position while it flips, the Echoflex footswitch (real knurled hex nut and turned cap) with its behaviour: switches on press, the cap darkens while held, 3 mm amber LED with chrome bezel that fades in / out and really lights the panel around it"]],
  ver_h=["Version", "Changes"]),
 "fr": dict(
  lang="FRANÇAIS", sub="Pédale wah à inducteur &nbsp;·&nbsp; VST3 pour Windows et macOS", ver="Notice d'utilisation &nbsp;·&nbsp; version " + VERSION,
@@ -187,7 +187,7 @@ T = {
    ["5", "Q", "Résonance de la pointe, de large et douce (Q 2) à très vocale (Q 14). 40 % par défaut (Q d'environ 4,4, la Cry Baby d'origine)."],
    ["6", "PURR", "Saturation de l'inducteur et grain de l'entrée (20 % par défaut)."],
    ["7", "BOOST", "Gain de sortie, de 0 à +15 dB (0 dB par défaut)."],
-   ["8", "Footswitch", "Effet ON / OFF, fondu sans clic. Le footswitch s'enfonce visiblement à l'appui, y compris quand il est basculé par le MIDI ou l'automation."],
+   ["8", "Footswitch", "Effet ON / OFF, fondu sans clic. Même footswitch et même fonctionnement qu'Echoflex : il bascule dès l'appui et le bouton s'assombrit tant qu'on appuie."],
    ["9", "LED", "LED ambre 3 mm à bague chromée : s'allume en fondu quand la wah est active (et éclaire la façade autour d'elle) ; faible lueur en AUTO tant que la pédale n'a pas bougé."],
    ["10", "IN", "Jack d'entrée (côté droit)."],
    ["11", "OUT", "Jack de sortie (côté gauche)."]],
@@ -229,7 +229,7 @@ T = {
        ["1.1.0", "Nouveau design de l'utilisateur ; bascule du plateau avec jeu d'ombres et lumières, tranches visibles, ombre selon la hauteur et charnière soignée ; plus aucune saccade avec les pédales d'expression MIDI (rampe adaptative + glissé à 2 étages, CC 14 bits) ; fenêtre 486 x 495"],
        ["1.1.1", "Éclairage du plateau comme Wharry (la face se tourne vers / s'écarte de la lumière, reflet mobile, ombre de contact à plat), IN / OUT alignés sur les jacks, vis de droite supprimées, positions du plateau précalculées en arrière-plan (anti-gel)"],
        ["1.2.0", "Course de la pédale d'expression apprise automatiquement (0 et 100 % exacts avec les pédales qui envoient par ex. 2-116), zones mortes aux butées ; plugin renommé Crycat dans le DAW"],
-       ["1.3.0", "Commandes réalistes, toutes éclairées par la même lumière (en haut à gauche) : inverseur MAN / AUTO avec position intermédiaire pendant la bascule, footswitch rendu en 3D avec enfoncement visible (souris, MIDI et automation), LED ambre 3 mm à bague chromée qui s'allume / s'éteint en fondu et éclaire réellement la façade autour d'elle"]],
+       ["1.3.0", "Commandes réalistes, toutes éclairées par la même lumière (en haut à gauche) : inverseur MAN / AUTO avec position intermédiaire pendant la bascule, footswitch d'Echoflex (vrai écrou hexagonal moleté et bouton en métal tourné) avec son fonctionnement : bascule à l'appui, bouton assombri tant qu'on appuie, LED ambre 3 mm à bague chromée qui s'allume / s'éteint en fondu et éclaire réellement la façade autour d'elle"]],
  ver_h=["Version", "Changements"]),
 }
 

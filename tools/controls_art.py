@@ -3,8 +3,7 @@
 #   Chaque position est rendue avec la MÊME lumière (jamais un miroir d'une autre position : la lumière serait inversée).
 #   Sorties (images 2x, repère 911 x 928 du plugin) :
 #     toggle_l.png / toggle_m.png / toggle_r.png : inverseur MAN / (en mouvement) / AUTO, ombres portées comprises
-#     fs_up_off.png / fs_down_off.png / fs_up_on.png / fs_down_on.png : footswitch relâché / enfoncé, LED éteinte / allumée
-#       (la LED ambre éclaire un peu le flanc de l'écrou tourné vers elle)
+#     fs_off.png / fs_on.png : footswitch d'ECHOFLEX (photo), LED éteinte / allumée (reflet ambre sur le flanc tourné vers la LED)
 #     led_glow.png : façade éclairée par la LED (le grain du boîtier prend la lumière, décroissance physique) ; affiché avec
 #       une opacité = intensité de la LED
 #   Les coordonnées sont écrites dans tools/controls_layout.txt (reprises dans PluginEditor.cpp).
@@ -133,67 +132,47 @@ FS_C = (671.0, 721.8)          # axe du footswitch (mesuré sur le design)
 LED_C = (772.4, 724.8)
 TG_C = (795.4, 129.7)          # axe de l'inverseur
 
-# ------------------------------------------------------------------ 1) footswitch
-def footswitch(pressed, led_on):
-    W_ = 136.0
-    c = Canvas(W_, W_, W_ / 2, W_ / 2)
-    x, y = c.x, c.y
-    r = np.hypot(x, y)
-    # écrou hexagonal (pointe en haut), hauteur 7, chanfrein de 45° qui laisse une face ronde au sommet
-    INR, HN = 43.0, 7.0
-    hx = hexagon_r(x, y, INR, pointy=False)      # pointe en haut (comme le design)
-    nut_h = np.minimum(HN, (INR - hx) * 2.4)                       # flancs raides
-    nut_h = np.minimum(nut_h, HN - np.clip(r - (INR - 3.0), 0, None) * 0.95)   # chanfrein conique
-    c.put(np.clip(nut_h, 0, None), (hx < INR) & (nut_h > 0), 1)
-    # alésage sombre autour du bouton
-    hole = r < 33.2
-    c.h[hole] = HN - 3.0; c.mat[hole] = 3
-    # bouton : cylindre à arête arrondie, dessus très légèrement bombé
-    CR = 31.0
-    top = (HN + 8.5) if not pressed else (HN + 1.2)            # course visible : enfoncé, le bouton affleure l'écrou
-    edge = 3.2
-    inside = r < CR
-    prof = np.where(r < CR - edge, top + 1.1 * (1 - (r / (CR - edge)) ** 2),
-                    top - edge + np.sqrt(np.clip(edge ** 2 - (r - (CR - edge)) ** 2, 0, None)))
-    c.put(prof, inside, 2)
-    vis = soft_shadow(c, samples=12, spread=0.09, max_u=40)
-    n = normals(c, c.h)
-    led = ((LED_C[0] - FS_C[0], LED_C[1] - FS_C[1], 6.0), (1.0, 0.62, 0.22), 70000.0) if led_on else None
-    nut = shade(c, n, vis, (0.93, 0.92, 0.90), "satin", rough=0.45, led=led)
-    cap = shade(c, n, vis, (0.95, 0.94, 0.93), "satin", rough=0.30, led=led)
-    hole_col = shade(c, n, vis, (0.5, 0.5, 0.52), "dark", led=None) * 0.5
-    # métal tourné : stries concentriques -> reflet anisotrope en « ailes de papillon » orienté vers la lumière
-    phi = np.arctan2(y, x); phiL = math.atan2(L[1], L[0])
-    flat_cap = (c.mat == 2) & (r < CR - edge)
-    aniso = (0.5 + 0.5 * np.cos(2 * (phi - phiL))) ** 6
-    rings = np.random.default_rng(5).normal(0, 1, 4000)
-    ring_n = cv2.GaussianBlur(rings.reshape(1, -1), (0, 0), 1.5).ravel()
-    ring_tex = ring_n[np.clip((r * 40).astype(int), 0, 3999)] * 5.0      # stries fines, aléatoires (pas de moiré)
-    sheen = (70 * aniso + ring_tex) * (0.45 + 0.55 * vis)
-    cap = cap + (sheen * flat_cap * (0.78 if pressed else 1.0))[..., None]
-    cap = cap * (1.0 - 0.10 * (r / CR) ** 2)[..., None]                   # léger vignettage du dessus bombé
-    flat_nut = (c.mat == 1) & (r < INR - 3.0)
-    nut = nut + ((45 * aniso + 0.7 * ring_tex) * flat_nut * (0.45 + 0.55 * vis))[..., None]
-    if pressed:
-        cap = cap * 0.90                                                   # plus bas : moins de lumière d'ambiance
-    rgb = np.where((c.mat == 1)[..., None], nut, np.where((c.mat == 2)[..., None], cap, hole_col))
-    # occlusion ambiante dans la gorge autour du bouton (plus marquée quand il est enfoncé)
-    ao = np.clip(1 - np.exp(-np.clip(r - CR, 0, None) / 1.4), 0, 1)
-    rgb = np.where((c.mat == 3)[..., None], rgb * ao[..., None], rgb)
-    if pressed:
-        # le bouton enfoncé est dans l'ombre du bord de l'écrou côté lumière (calculé par le lancer de rayons) ;
-        # on ajoute l'occlusion ambiante de la gorge qui l'entoure
-        ring = np.clip(1 - (CR - r) / 5.0, 0, 1) * (c.mat == 2)
-        rgb *= (1 - 0.30 * ring)[..., None]
-    sh = panel_shadow(c, vis)
-    name = f"fs_{'down' if pressed else 'up'}_{'on' if led_on else 'off'}.png"
-    finish(c, rgb, sh, name, (round(W_ * AS), round(W_ * AS)))
-    return W_
+# ------------------------------------------------------------------ 1) footswitch : celui d'ECHOFLEX (photo réelle)
+# Footswitch de référence Studio Wiga : écrou hexagonal moleté + bouton en métal tourné, photographié sur la pédale Echoflex
+# (design/echoflex_footswitch_source.png = extrait de background.jpg d'Echoflex, 2 px par unité, centre au milieu).
+# Mis à l'échelle de la pédale, détouré sur son hexagone, ombre portée ajoutée selon la lumière en haut à gauche.
+EF_PTS = [(1.7, -56.7), (51.7, -26.7), (51.7, 31.7), (5.0, 58.3), (-48.3, 30.0), (-49.3, -26.7)]   # hexagone (unités Echoflex)
+EF_CENTROID = (1.5, 1.5)
+EF_FLATS = 100.5                       # largeur entre plats (unités Echoflex)
+FS_FLATS = 87.0                        # largeur voulue sur Crycat (celle du design)
+FS_K = FS_FLATS / EF_FLATS
+FS_W = 170.0                           # sprite carré (unités Crycat), ombre comprise
 
-FS_W = None
-for p_ in (False, True):
-    for l_ in (False, True):
-        FS_W = footswitch(p_, l_)
+def footswitch_echoflex(led_on):
+    src = np.asarray(Image.open(os.path.join(ROOT, "design", "echoflex_footswitch_source.png")).convert("RGB")).astype(np.float64)
+    n = round(FS_W * AS)                       # taille du sprite (px, 2x)
+    sc = FS_K * AS / 2.0                       # px source -> px sprite
+    # source recentrée sur le centroïde de l'hexagone, mise à l'échelle (Lanczos)
+    M = np.float32([[sc, 0, n / 2 - (150 + 2 * EF_CENTROID[0]) * sc], [0, sc, n / 2 - (150 + 2 * EF_CENTROID[1]) * sc]])
+    rgb = cv2.warpAffine(src, M, (n, n), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+    # détourage sur l'hexagone (léger retrait, bord adouci)
+    pts = np.array([[n / 2 + (x - EF_CENTROID[0]) * FS_K * AS * 0.992, n / 2 + (y - EF_CENTROID[1]) * FS_K * AS * 0.992] for x, y in EF_PTS])
+    m = np.zeros((n * 4, n * 4), np.uint8); cv2.fillPoly(m, [np.round(pts * 4).astype(np.int32)], 255)
+    a = cv2.resize(m, (n, n), interpolation=cv2.INTER_AREA).astype(np.float64) / 255.0
+    a = cv2.GaussianBlur(a, (0, 0), 0.6)
+    if led_on:
+        # la LED ambre (à droite) se reflète sur les flancs et la bague moletée tournés vers elle
+        yy, xx = np.mgrid[0:n, 0:n].astype(np.float64)
+        ux = (xx - n / 2) / (AS * FS_K * 50.0)
+        w = np.clip(ux, 0, 1) ** 2 * (rgb.mean(2) / 255.0)
+        rgb = rgb + (w * 70.0)[..., None] * np.array([1.0, 0.58, 0.18])
+    # ombre portée (lumière en haut à gauche) + ombre de contact
+    def shift(img, dx, dy): return cv2.warpAffine(img, np.float32([[1, 0, dx], [0, 1, dy]]), (n, n))
+    cast = cv2.GaussianBlur(shift(a, 4.5 * AS, 6.5 * AS), (0, 0), 4.5 * AS) * 0.55
+    contact = cv2.GaussianBlur(shift(a, 1.0 * AS, 1.5 * AS), (0, 0), 1.6 * AS) * 0.45
+    sh = np.clip(cast + contact, 0, 0.8) * (1 - a)
+    alpha = np.clip(a + sh, 0, 1)
+    col = np.where(alpha[..., None] > 1e-4, rgb * (a / np.maximum(alpha, 1e-4))[..., None], 0)    # l'ombre est noire
+    out = np.dstack([np.clip(col, 0, 255), alpha * 255]).astype(np.uint8)
+    Image.fromarray(out, "RGBA").save(os.path.join(ROOT, "fs_on.png" if led_on else "fs_off.png"))
+
+for l_ in (False, True):
+    footswitch_echoflex(l_)
 
 # ------------------------------------------------------------------ 2) inverseur (bat toggle) : 3 positions
 def toggle(pos):            # pos : -1 = MAN (levier à gauche), 0 = en mouvement (vertical), 1 = AUTO (à droite)
@@ -266,7 +245,7 @@ lit += bloom[..., None] * amber
 Image.fromarray(np.clip(lit, 0, 255).astype(np.uint8)).save(os.path.join(ROOT, "led_glow.png"))
 
 with open(os.path.join(ROOT, "tools", "controls_layout.txt"), "w") as fo:
-    fo.write(f"fs centre {FS_C} sprite {FS_W} x {FS_W}  -> rect {FS_C[0] - FS_W / 2:.2f} {FS_C[1] - FS_W / 2:.2f} {FS_W} {FS_W}\n")
+    fo.write(f"fs (Echoflex) centre {FS_C} sprite {FS_W} x {FS_W}  -> rect {FS_C[0] - FS_W / 2:.2f} {FS_C[1] - FS_W / 2:.2f} {FS_W} {FS_W}  echelle {FS_K:.4f}  bouton r {35.0 * FS_K:.1f}  appui r {0.54 * 55.0 * FS_K:.1f}\n")
     W_, H_, ox, oy = TG
     fo.write(f"toggle pivot {TG_C} sprite {W_} x {H_} -> rect {TG_C[0] - ox:.2f} {TG_C[1] - oy:.2f} {W_} {H_}\n")
     fo.write(f"led centre {LED_C} glow rect {gx0:.2f} {gy0:.2f} {2 * GR} {2 * GR}\n")
