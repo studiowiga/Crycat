@@ -8,7 +8,7 @@ from reportlab.lib.units import mm
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
-from reportlab.platypus import (BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer, Image as RLImage,
+from reportlab.platypus import (BaseDocTemplate, PageTemplate, NextPageTemplate, Frame, Paragraph, Spacer, Image as RLImage,
                                 Table, TableStyle, PageBreak, KeepTogether)
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -48,7 +48,29 @@ heeltoe = os.path.join(TMP, "crycat_heeltoe.png"); both.save(heeltoe)
 # gros plan de l'écran (milieu de course)
 scr = src.crop((int(646 * k), int(189 * k), int(863 * k), int(435 * k))).resize((434, 492), Image.LANCZOS)
 screen_img = os.path.join(TMP, "crycat_screen.png"); scr.save(screen_img)
-cover = os.path.join(SHOTS, "crycat_100pc_milieu.png")
+# couverture : pédale détourée (silhouette design/pedal_mask.png) posée sur fond noir, léger reflet au sol et halo ambré
+shot = Image.open(os.path.join(SHOTS, "crycat_100pc_pointe.png")).convert("RGB")      # plateau à plat : silhouette nette
+msk = Image.open(os.path.join(ROOT, "design", "pedal_mask.png")).convert("L").resize(shot.size, Image.LANCZOS)
+cut = Image.new("RGBA", shot.size, (0, 0, 0, 0)); cut.paste(shot, (0, 0), msk)
+cut = cut.crop(cut.getbbox())
+cw, ch = cut.size
+pad = int(cw * 0.10)
+canvas = Image.new("RGBA", (cw + 2 * pad, int(ch * 1.30) + pad), (0, 0, 0, 255))
+yy, xx = np.mgrid[0:canvas.height, 0:canvas.width].astype(np.float64)
+gcx, gcy = canvas.width / 2, pad + ch * 0.45
+glow = np.exp(-(((xx - gcx) / (cw * 0.48)) ** 2 + ((yy - gcy) / (ch * 0.42)) ** 2)) * 40            # halo ambré très doux derrière la pédale
+edge = np.clip(np.minimum.reduce([xx, canvas.width - 1 - xx, yy, canvas.height - 1 - yy]) / (pad * 0.9), 0, 1)
+glow *= edge ** 2                                                         # retombe à zéro avant les bords : aucun cadre visible
+halo = np.dstack([glow * 1.0, glow * 0.52, glow * 0.14, np.full_like(glow, 255)]).astype(np.uint8)
+canvas = Image.alpha_composite(canvas, Image.fromarray(halo, "RGBA"))
+refl = cut.transpose(Image.FLIP_TOP_BOTTOM)                              # reflet sur un sol noir brillant
+ra = np.array(refl).astype(np.float64)
+fade = np.clip(1 - np.arange(refl.height) / (refl.height * 0.22), 0, 1) ** 1.6 * 0.22
+ra[..., 3] *= fade[:, None]
+canvas.alpha_composite(Image.fromarray(ra.astype(np.uint8), "RGBA"), (pad, pad + ch + 6))
+canvas.alpha_composite(cut, (pad, pad))
+canvas = canvas.crop((0, 0, canvas.width, pad + int(ch * 1.20)))
+cover = os.path.join(TMP, "crycat_cover_cutout.png"); canvas.convert("RGB").save(cover)
 
 def img(path, width):
     im = Image.open(path); h = width * im.height / im.width
@@ -62,8 +84,9 @@ st = {
     "small": ParagraphStyle("small", fontName="Pop", fontSize=8.2, leading=11.5, textColor=GREY),
     "cell": ParagraphStyle("cell", fontName="Pop", fontSize=8.4, leading=11, textColor=DARK),
     "cellb": ParagraphStyle("cellb", fontName="PopM", fontSize=8.4, leading=11, textColor=DARK),
-    "cover": ParagraphStyle("cover", fontName="PopL", fontSize=40, leading=46, textColor=DARK, alignment=TA_CENTER),
-    "coversub": ParagraphStyle("coversub", fontName="Pop", fontSize=12, leading=16, textColor=GREY, alignment=TA_CENTER),
+    "cover": ParagraphStyle("cover", fontName="PopL", fontSize=40, leading=46, textColor=colors.white, alignment=TA_CENTER),
+    "coversub": ParagraphStyle("coversub", fontName="Pop", fontSize=12, leading=16, textColor=colors.HexColor("#BDB6AE"), alignment=TA_CENTER),
+    "coverlang": ParagraphStyle("coverlang", fontName="PopM", fontSize=8.5, leading=11, textColor=colors.HexColor("#F0A43A")),
 }
 def P(t, s="p"): return Paragraph(t, st[s])
 def bullets(items): return [P("&bull;&nbsp;&nbsp;" + i) for i in items]
@@ -236,23 +259,25 @@ T = {
 W = A4[0] - 36 * mm
 def section(lang):
     t = T[lang]; f = []
-    f.append(Spacer(1, 12 * mm))
-    f.append(P(t["lang"], "small"))
+    # couverture (page noire, pédale détourée, comme Wharry)
+    f.append(NextPageTemplate("p"))
     f.append(Spacer(1, 4 * mm))
-    f.append(img(cover, W * 0.86))
-    f.append(Spacer(1, 6 * mm))
+    f.append(P(t["lang"], "coverlang"))
+    f.append(Spacer(1, 3 * mm))
+    f.append(img(cover, W))
+    f.append(Spacer(1, 2 * mm))
     f.append(P("C R Y C A T", "cover"))
     f.append(P(t["sub"], "coversub"))
     f.append(Spacer(1, 2 * mm))
     f.append(P(t["ver"], "coversub"))
-    f.append(Spacer(1, 6 * mm))
-    f.append(img(os.path.join(TMP, "logo_dark.png"), 52 * mm))
+    f.append(Spacer(1, 7 * mm))
+    f.append(img(os.path.join(ROOT, "logo_studio_wiga_blanc.png"), 52 * mm))
     f.append(PageBreak())
     f.append(P(t["intro_t"], "h1")); f += [P(x) for x in t["intro"]]
     f.append(P(t["inst_t"], "h1"))
     for h, x in t["inst"]: f.append(P(h, "h2")); f.append(P(x))
     f.append(PageBreak())
-    f.append(P(t["ov_t"], "h1")); f.append(img(annotated, W * 0.78)); f.append(Spacer(1, 3 * mm))
+    f.append(P(t["ov_t"], "h1")); f.append(img(annotated, W * 0.70)); f.append(Spacer(1, 3 * mm))
     f.append(table(t["ov_rows"], [10 * mm, 36 * mm, W - 46 * mm]))
     f.append(PageBreak())
     f.append(P(t["ctl_t"], "h1"))
@@ -288,14 +313,19 @@ def deco(c, doc):
     c.setFillColor(DARK); c.rect(0, A4[1] - 6 * mm, A4[0], 6 * mm, stroke=0, fill=1)
     c.setFillColor(ACC); c.rect(0, A4[1] - 6.8 * mm, A4[0], 0.8 * mm, stroke=0, fill=1)
     c.setFont("Pop", 7.5); c.setFillColor(GREY)
-    c.drawString(18 * mm, 10 * mm, "CRYCAT (Studio Wiga) · v" + VERSION)
+    c.drawString(18 * mm, 10 * mm, "Crycat (Studio Wiga) · v" + VERSION)
     c.drawRightString(A4[0] - 18 * mm, 10 * mm, str(doc.page))
     c.restoreState()
 
 doc = BaseDocTemplate(OUT, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=16 * mm, bottomMargin=18 * mm,
                       title="CRYCAT - Manual / Notice v" + VERSION, author="Studio Wiga")
-doc.addPageTemplates([PageTemplate(id="p", frames=[Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="f")], onPage=deco)])
-story = section("en") + section("fr")
-story = story[:-1]
+def cover_bg(c, doc):
+    c.saveState(); c.setFillColor(colors.black); c.rect(0, 0, A4[0], A4[1], stroke=0, fill=1)
+    c.setFillColor(ACC); c.rect(0, A4[1] - 3 * mm, A4[0], 3 * mm, stroke=0, fill=1); c.restoreState()
+doc.addPageTemplates([PageTemplate(id="cover", frames=[Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="fc")], onPage=cover_bg),
+                      PageTemplate(id="p", frames=[Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="f")], onPage=deco)])
+en = section("en"); fr = section("fr")
+en[-1:] = [NextPageTemplate("cover"), PageBreak()]      # la partie française commence aussi par une couverture noire
+story = en + fr[:-1]
 doc.build(story)
 print(OUT)
