@@ -90,13 +90,28 @@ keep[lab == big] = 1                                       # levier + écrou : l
 keep = cv2.morphologyEx(keep, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
 keep = cv2.dilate(keep, np.ones((5, 5), np.uint8))
 tog_alpha = cv2.GaussianBlur(keep.astype(np.float32), (0, 0), 1.0)
-patch = A[ty0 - 112:ty1 - 112, tx0:tx1].astype(np.float32)          # zone propre au-dessus
-band = np.zeros(keep.shape, bool); band[:14, :] = True                              # bande propre au-dessus de l'inverseur
-patch *= (out[ty0:ty1, tx0:tx1][band].mean(0) / np.maximum(patch[band].mean(0), 1))   # même luminosité que l'entourage
-zone = np.zeros_like(keep); cv2.ellipse(zone, (96, 70), (94, 52), 0, 0, 360, 1, -1)
-zone = np.maximum(zone, cv2.dilate(keep, np.ones((25, 25), np.uint8)))
-fill = cv2.GaussianBlur(zone.astype(np.float32), (0, 0), 5)[..., None]
-out[ty0:ty1, tx0:tx1] = out[ty0:ty1, tx0:tx1] * (1 - fill) + patch * fill
+
+def fill_panel(mask, grain_box):
+    """ efface une pièce du design : teinte basse fréquence par inpainting (à 1/4) + grain du boîtier
+        pris dans une zone propre (miroirs, sans répétition visible) """
+    global out
+    low = cv2.inpaint(cv2.resize(np.clip(out, 0, 255).astype(np.uint8), None, fx=0.25, fy=0.25),
+                      cv2.dilate(cv2.resize(mask, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_LINEAR), np.ones((3, 3), np.uint8)), 7, cv2.INPAINT_TELEA)
+    low = cv2.GaussianBlur(cv2.resize(low, (DW, DH)).astype(np.float32), (0, 0), 6)
+    gx0, gy0, gx1, gy1 = grain_box
+    patch = out[gy0:gy1, gx0:gx1]
+    hf = patch - cv2.GaussianBlur(patch, (0, 0), 4)
+    tile = np.concatenate([hf, hf[:, ::-1]], 1); tile = np.concatenate([tile, tile[::-1]], 0)
+    ys, xs = np.where(mask > 0)
+    y0, y1, x0, x1 = ys.min() - 20, ys.max() + 20, xs.min() - 20, xs.max() + 20
+    reps = ((y1 - y0) // tile.shape[0] + 1, (x1 - x0) // tile.shape[1] + 1, 1)
+    grain = np.tile(tile, reps)[:y1 - y0, :x1 - x0]
+    mf = cv2.GaussianBlur(mask.astype(np.float32) / 255, (0, 0), 3)[y0:y1, x0:x1, None]
+    out[y0:y1, x0:x1] = out[y0:y1, x0:x1] * (1 - mf) + (low[y0:y1, x0:x1] + grain) * mf
+
+tm = np.zeros((DH, DW), np.uint8)
+cv2.ellipse(tm, (TOG[0] - 4, TOG[1] + 10), (92, 64), 0, 0, 360, 255, -1)     # levier, écrou et leur ombre du design
+fill_panel(tm, (2110, 212, 2380, 302))
 # ombre douce sous l'écrou (le sprite garde levier + écrou ; l'ombre reste sur le fond)
 
 # 1d) vitre de l'écran vidée (le plugin dessine l'affichage)
@@ -148,6 +163,15 @@ def erase_label(x0, y0, x1, y1, dy):
 erase_label(92, 1205, 160, 1345, -170)
 erase_label(2384, 1274, 2442, 1348, 140)
 
+# 1h) footswitch du design effacé (remplacé par le rendu physique de tools/controls_art.py) :
+#     teinte basse fréquence par inpainting + grain du boîtier pris dans une zone propre à gauche (miroirs, sans répétition visible)
+FC = (1863, 2004)
+fm = np.zeros((DH, DW), np.uint8)
+hexpts = np.array([[FC[0] + 172 * math.cos(math.radians(90 + 60 * i)), FC[1] + 172 * math.sin(math.radians(90 + 60 * i))] for i in range(6)], np.int32)
+cv2.fillPoly(fm, [hexpts], 255)
+fm = cv2.dilate(fm, np.ones((15, 15), np.uint8))
+fill_panel(fm, (1420, 1770, 1700, 2220))
+
 img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 d = ImageDraw.Draw(img)
 INK = (226, 224, 222)
@@ -193,25 +217,7 @@ pm = pm.filter(ImageFilter.GaussianBlur(1.2))
 plate = plate_src.convert("RGBA"); plate.putalpha(pm)
 to_asset(plate).save(os.path.join(ROOT, "treadle_down.png"), optimize=True)
 
-# footswitch : disque adouci autour de l'écrou hexagonal
-fx0, fy0 = FSW[0] - FS_HALF, FSW[1] - FS_HALF
-fs = img.crop((fx0, fy0, fx0 + 2 * FS_HALF, fy0 + 2 * FS_HALF)).convert("RGBA")
-fa = Image.new("L", fs.size, 0); ImageDraw.Draw(fa).ellipse((6, 6, fs.width - 6, fs.height - 6), fill=255)
-fs.putalpha(fa.filter(ImageFilter.GaussianBlur(5)))
-fsz = round(2 * FS_HALF * S * AS)
-fs = fs.resize((fsz, fsz), Image.LANCZOS)
-fs.save(os.path.join(ROOT, "fs_on.png")); fs.save(os.path.join(ROOT, "fs_off.png"))
-
-# inverseur : levier + écrou détourés ; position AUTO = miroir
-def toggle_sprite(rgb, alpha):
-    shd = np.roll(np.roll(alpha, 9, 0), 6, 1)
-    shd = cv2.GaussianBlur(shd, (0, 0), 5) * 0.6
-    a = np.clip(alpha + shd * (1 - alpha), 0, 1)
-    col = rgb * (alpha / np.maximum(a, 1e-3))[..., None]           # l'ombre est noire
-    return Image.fromarray(np.dstack([col, a * 255]).clip(0, 255).astype(np.uint8), "RGBA")
-tsz = (round(200 * S * AS), round(124 * S * AS))
-toggle_sprite(crop, tog_alpha).resize(tsz, Image.LANCZOS).save(os.path.join(ROOT, "toggle_l.png"))
-toggle_sprite(crop[:, ::-1].copy(), tog_alpha[:, ::-1].copy()).resize(tsz, Image.LANCZOS).save(os.path.join(ROOT, "toggle_r.png"))
+# footswitch, inverseur et LED : rendus à part par tools/controls_art.py (lumière cohérente, positions enfoncée / mouvement)
 
 # ------------------------------------------------------------------ 3) coordonnées pour PluginEditor.cpp
 with open(os.path.join(ROOT, "tools", "layout.txt"), "w") as fo:
@@ -223,6 +229,5 @@ with open(os.path.join(ROOT, "tools", "layout.txt"), "w") as fo:
     for n_, (x, y) in zip(("q", "purr", "boost"), SMALL): fo.write(f"{n_} {F(x):.1f} {F(y):.1f}\n")
     fo.write(f"smallR {F(SMALL_R):.1f} smallCap {F(SMALL_CAP):.1f}\n")
     fo.write(f"screen {F(SCREEN[0]):.1f} {F(SCREEN[1]):.1f} {F(SCREEN[2] - SCREEN[0]):.1f} {F(SCREEN[3] - SCREEN[1]):.1f}\n")
-    fo.write(f"fs {F(fx0):.1f} {F(fy0):.1f} {F(2 * FS_HALF):.1f}\nled {F(LED[0]):.1f} {F(LED[1]):.1f}\n")
-    fo.write(f"toggle {F(tx0):.1f} {F(ty0):.1f} {F(200):.1f} {F(124):.1f}\n")
+    fo.write("footswitch / inverseur / LED : voir tools/controls_layout.txt\n")
 print("ok", FW, OW, OH)

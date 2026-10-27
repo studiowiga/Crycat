@@ -20,6 +20,8 @@ Design de l'utilisateur : `design/crycat_design_source.png`. `python3 tools/desi
 repères, LED et levier retirés, textes corrigés, logement sombre sous le plateau), `treadle_down.png` (plateau à plat), les sprites
 (images 2x pour les écrans HiDPI) et `tools/layout.txt`. Le plugin calcule la bascule du plateau en perspective, avec tranches,
 reflet mobile, ombre portée selon la hauteur et charnière.
+`python3 tools/controls_art.py` rend en 3D (champ de hauteurs, ombres par lancer de rayons, lumière unique en haut à gauche)
+l'inverseur MAN / AUTO (3 positions), le footswitch (relâché / enfoncé, LED éteinte / allumée) et la façade éclairée par la LED.
 Captures réelles de la fenêtre : `tools/render` (outil Linux, `design/renders/`).
 
 ## Build

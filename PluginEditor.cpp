@@ -23,11 +23,15 @@ namespace
     const char* const kSmallId[3] = { "q", "purr", "boost" };
     const Rectangle<float> kScreen (656.0f, 199.2f, 196.7f, 226.2f);
     constexpr float kScreenRadius = 6.5f;
-    const Rectangle<float> kFs (615.7f, 668.6f, 108.1f, 108.1f);           // footswitch ON / OFF
+    // commandes rendues par tools/controls_art.py (tools/controls_layout.txt)
+    const Rectangle<float> kFs (603.0f, 653.8f, 136.0f, 136.0f);           // footswitch (sprite, ombre comprise)
+    const Point<float> kFsC (671.0f, 721.8f);  constexpr float kFsHitR = 46.0f;
     const Point<float> kFsLed (772.4f, 724.8f);
-    const Rectangle<float> kToggle (759.4f, 107.4f, 72.0f, 44.7f);         // inverseur MAN / AUTO (sprite)
+    const Rectangle<float> kLedGlow (694.4f, 646.8f, 156.0f, 156.0f);      // façade éclairée par la LED
+    const Rectangle<float> kToggle (753.4f, 101.7f, 84.0f, 60.0f);         // inverseur MAN / AUTO (sprite, ombre comprise)
     const Rectangle<float> kToggleHit (722.0f, 98.0f, 160.0f, 62.0f);
-    constexpr float kLedR = 7.6f;
+    constexpr float kLedLensR = 5.8f, kLedGapR = 7.2f, kLedRingR = 9.4f;   // LED 3 mm : lentille, gorge, bague chromée
+    constexpr float kLedR = kLedRingR;
     const Colour kInk (0xffe2e0de), kAmber (0xffffb040), kAmberHi (0xffffd690), kScreenBg (0xff0e0a07);
     constexpr int kFrames = 33;                                             // positions précalculées du plateau
 
@@ -425,9 +429,13 @@ public:
     explicit PedalView (CrycatProcessor& p) : proc (p)
     {
         bg.src    = loadPng (BinaryData::background_png, BinaryData::background_pngSize);
-        fsOn.src  = loadPng (BinaryData::fs_on_png, BinaryData::fs_on_pngSize);
-        fsOff.src = loadPng (BinaryData::fs_off_png, BinaryData::fs_off_pngSize);
+        fsUpOff.src   = loadPng (BinaryData::fs_up_off_png, BinaryData::fs_up_off_pngSize);
+        fsUpOn.src    = loadPng (BinaryData::fs_up_on_png, BinaryData::fs_up_on_pngSize);
+        fsDownOff.src = loadPng (BinaryData::fs_down_off_png, BinaryData::fs_down_off_pngSize);
+        fsDownOn.src  = loadPng (BinaryData::fs_down_on_png, BinaryData::fs_down_on_pngSize);
+        ledGlow.src   = loadPng (BinaryData::led_glow_png, BinaryData::led_glow_pngSize);
         tgL.src   = loadPng (BinaryData::toggle_l_png, BinaryData::toggle_l_pngSize);
+        tgM.src   = loadPng (BinaryData::toggle_m_png, BinaryData::toggle_m_pngSize);
         tgR.src   = loadPng (BinaryData::toggle_r_png, BinaryData::toggle_r_pngSize);
         treadle.setSource (loadPng (BinaryData::treadle_down_png, BinaryData::treadle_down_pngSize));
         typeface = Typeface::createSystemTypefaceFor (BinaryData::PoppinsMedium_ttf, BinaryData::PoppinsMedium_ttfSize);
@@ -469,16 +477,32 @@ public:
         for (int i = 0; i < 3; ++i)
             drawPointer (g, kSmallCap[i], kSmallCapR, degreesToRadians (-135.0f + 270.0f * drawnSmall[i]), 3.4f);
 
-        // ---- inverseur MAN / AUTO ----
-        g.drawImage ((drawnAuto ? tgR : tgL).get (ps), r (kToggle));
-
-        // ---- footswitch + LED ambre ----
+        // ---- inverseur MAN / AUTO : position intermédiaire affichée brièvement pendant la bascule ----
         {
-            auto fr2 = r (kFs);
-            if (pressed) fr2 = fr2.withSizeKeepingCentre (fr2.getWidth() * 0.965f, fr2.getHeight() * 0.965f).translated (0, 1.5f * s);
-            g.drawImage ((drawnOn ? fsOn : fsOff).get (ps), fr2);
-            drawLed (g, kFsLed, drawnOn ? 1.0f : (drawnArmed ? 0.18f : 0.0f));
+            const bool moving = Time::getMillisecondCounterHiRes() < toggleMidUntil;
+            g.drawImage ((moving ? tgM : (drawnAuto ? tgR : tgL)).get (ps), r (kToggle));
         }
+
+        // ---- LED ambre : la façade prend la lumière (calque photo), puis footswitch, puis la LED elle-même ----
+        if (ledLevel > 0.003f)
+        {
+            g.setOpacity (jmin (1.0f, ledLevel));
+            g.drawImage (ledGlow.get (ps), r (kLedGlow));
+            g.setOpacity (1.0f);
+        }
+        {
+            const bool down = footDown();
+            auto& offImg = down ? fsDownOff : fsUpOff;
+            auto& onImg  = down ? fsDownOn : fsUpOn;
+            g.drawImage (offImg.get (ps), r (kFs));
+            if (ledLevel > 0.003f)    // flanc de l'écrou tourné vers la LED : reflet ambre
+            {
+                g.setOpacity (jmin (1.0f, ledLevel));
+                g.drawImage (onImg.get (ps), r (kFs));
+                g.setOpacity (1.0f);
+            }
+        }
+        drawLed (g, kFsLed, ledLevel);
 
         drawScreen (g);
     }
@@ -500,8 +524,8 @@ public:
                 if (auto* par = proc.apvts.getParameter (kSmallId[i])) { dragStartVal = par->getValue(); par->beginChangeGesture(); }
                 return;
             }
-        if (kToggleHit.contains (p)) { proc.togglePedalSwitch ("auto"); return; }
-        if (kFs.getCentre().getDistanceFrom (p) < kFs.getWidth() * 0.45f) { pressed = true; proc.togglePedalSwitch ("active"); repaint (r (kFs).toNearestInt().expanded (4)); return; }
+        if (kToggleHit.contains (p)) { proc.togglePedalSwitch ("auto"); return; }   // l'animation suit le paramètre (timer)
+        if (kFsC.getDistanceFrom (p) < kFsHitR) { pressed = true; selfToggle = true; footDownUntil = Time::getMillisecondCounterHiRes() + 110.0; proc.togglePedalSwitch ("active"); repaint (r (kFs).toNearestInt().expanded (4)); return; }
         if (kPlate.contains (p))
         {
             drag = Drag::Pedal; dragStartY = p.y;
@@ -536,7 +560,7 @@ public:
         if (drag == Drag::Pedal) if (auto* par = proc.apvts.getParameter ("pedal")) par->endChangeGesture();
         if (drag >= Drag::Small0) if (auto* par = proc.apvts.getParameter (kSmallId[(int) drag - (int) Drag::Small0])) par->endChangeGesture();
         drag = Drag::None;
-        if (pressed) { pressed = false; repaint (r (kFs).toNearestInt().expanded (4)); }
+        if (pressed) { pressed = false; repaint (r (kFs).toNearestInt().expanded (4)); }   // le timer garde l'appui visible au moins 110 ms
     }
 
     void mouseDoubleClick (const MouseEvent& e) override
@@ -595,21 +619,53 @@ private:
         g.strokePath (p, PathStrokeType (width * s, PathStrokeType::curved, PathStrokeType::rounded));
     }
 
-    // LED : bille sombre éteinte, cœur blanc chaud + halo ambré allumée
-    void drawLed (Graphics& g, Point<float> c0, float level)
+    // LED 3 mm (comme Holyverb) : bague chromée éclairée en haut à gauche, gorge sombre, lentille ambre ;
+    // allumée : cœur presque blanc, corps orangé, bord plus sombre ; reflet fixe de la lumière ambiante sur le dôme.
+    // Le halo n'est PAS un disque coloré posé dessus : c'est la façade qui reçoit la lumière (calque led_glow).
+    void drawLed (Graphics& g, Point<float> c0, float lvl)
     {
         const auto c = r (c0);
-        const float rr = kLedR * s;
-        g.setGradientFill (ColourGradient (Colour (0xff5d5250), c.x - rr * 0.35f, c.y - rr * 0.4f, Colour (0xff120d0c), c.x + rr, c.y + rr, true));
-        g.fillEllipse (c.x - rr, c.y - rr, 2 * rr, 2 * rr);
-        if (level > 0.01f)
+        // ombre portée de la bague (lumière en haut à gauche)
+        const float rr = kLedRingR * s;
+        g.setColour (Colours::black.withAlpha (0.45f));
+        g.fillEllipse (c.x - rr + 0.9f * s, c.y - rr + 1.4f * s, rr * 2.0f, rr * 2.0f);
+        ColourGradient chrome (Colour (0xffd2d4d8), c.x - rr * 0.8f, c.y - rr * 0.9f, Colour (0xff2a2c31), c.x + rr * 0.8f, c.y + rr * 0.9f, false);
+        chrome.addColour (0.45, Colour (0xff74777e));
+        g.setGradientFill (chrome);
+        g.fillEllipse (c.x - rr, c.y - rr, rr * 2.0f, rr * 2.0f);
+        if (lvl > 0.003f)       // la bague reflète un peu la LED
         {
-            g.setGradientFill (ColourGradient (kAmber.withAlpha (0.55f * level), c.x, c.y, kAmber.withAlpha (0.0f), c.x + rr * 3.8f, c.y, true));
-            g.fillEllipse (c.x - rr * 3.8f, c.y - rr * 3.8f, rr * 7.6f, rr * 7.6f);
-            g.setGradientFill (ColourGradient (Colour (0xfffff3dc).withAlpha (level), c.x, c.y, kAmber.withAlpha (level), c.x + rr, c.y, true));
-            g.fillEllipse (c.x - rr * 0.95f, c.y - rr * 0.95f, rr * 1.9f, rr * 1.9f);
+            g.setGradientFill (ColourGradient (kAmber.withAlpha (0.35f * lvl), c.x, c.y, kAmber.withAlpha (0.0f), c.x + rr, c.y, true));
+            g.fillEllipse (c.x - rr, c.y - rr, rr * 2.0f, rr * 2.0f);
         }
+        // gorge sombre
+        const float gr = kLedGapR * s;
+        g.setGradientFill (ColourGradient (Colour (0xff020101), c.x - gr * 0.6f, c.y - gr * 0.7f, Colour (0xff1c1612), c.x + gr * 0.7f, c.y + gr * 0.8f, false));
+        g.fillEllipse (c.x - gr, c.y - gr, gr * 2.0f, gr * 2.0f);
+        // lentille éteinte : ambre foncé translucide
+        const float lr = kLedLensR * s;
+        g.setGradientFill (ColourGradient (Colour (0xff5a2f0c), c.x - lr * 0.3f, c.y - lr * 0.4f, Colour (0xff160903), c.x + lr, c.y + lr, true));
+        g.fillEllipse (c.x - lr, c.y - lr, lr * 2.0f, lr * 2.0f);
+        if (lvl > 0.003f)
+        {
+            const float hot = jlimit (0.0f, 1.0f, lvl * 1.05f);
+            ColourGradient body (Colour (0xfffff6e2).withAlpha (hot), c.x + lr * 0.03f, c.y + lr * 0.02f, Colour (0xffb44a06).withAlpha (lvl), c.x + lr, c.y, true);
+            body.addColour (0.18, Colour (0xffffe0a6).withAlpha (hot));
+            body.addColour (0.40, Colour (0xffffa22e).withAlpha (lvl));
+            body.addColour (0.75, Colour (0xffe9760f).withAlpha (lvl));
+            g.setGradientFill (body);
+            g.fillEllipse (c.x - lr, c.y - lr, lr * 2.0f, lr * 2.0f);
+        }
+        g.setColour (Colours::black.withAlpha (0.35f));
+        g.drawEllipse (c.x - lr, c.y - lr, lr * 2.0f, lr * 2.0f, 0.7f * s);
+        ColourGradient sp (Colours::white.withAlpha (0.30f + 0.15f * lvl), c.x - lr * 0.38f, c.y - lr * 0.50f,
+                           Colours::white.withAlpha (0.0f), c.x - lr * 0.38f + lr * 0.36f, c.y - lr * 0.50f, true);
+        g.setGradientFill (sp);
+        g.fillEllipse (c.x - lr * 0.74f, c.y - lr * 0.80f, lr * 0.72f, lr * 0.56f);
     }
+
+    // footswitch enfoncé : tant que le clic est tenu (au moins 110 ms), et brièvement quand le MIDI / l'automation le bascule
+    bool footDown() const { return pressed || Time::getMillisecondCounterHiRes() < footDownUntil; }
 
     // écran ambre : plage + état, courbe de réponse en direct, fréquence centrale, course de la pédale, ligne d'état
     void drawScreen (Graphics& g)
@@ -757,12 +813,35 @@ private:
             repaint (r (Rectangle<float> (kKnob.x - h, kKnob.y - h, 2 * h, 2 * h)).toNearestInt().expanded (2));
             drawnRange = rg; screen = true;
         }
+        const double nowMs = Time::getMillisecondCounterHiRes();
+        const bool activeP = param ("active");
+        if (drawnActiveP >= 0 && (int) activeP != drawnActiveP)
+        {
+            if (! selfToggle) footDownUntil = nowMs + 120.0;      // basculé par le MIDI ou l'automation : on voit le footswitch s'enfoncer
+            selfToggle = false;
+            repaint (r (kFs).toNearestInt().expanded (4));
+        }
+        drawnActiveP = (int) activeP;
+        if (drawnAuto != autoM && drawnStarted) toggleMidUntil = nowMs + 55.0;
         if (autoM != drawnAuto || on != drawnOn || armed != drawnArmed)
         {
             drawnAuto = autoM; drawnOn = on; drawnArmed = armed; screen = true;
             repaint (r (kToggle).toNearestInt().expanded (3));
-            repaint (r (kFs).toNearestInt().expanded (4));
-            repaint (ledArea (kFsLed));
+        }
+        drawnStarted = true;
+        const bool toggleMoving = nowMs < toggleMidUntil;
+        if (toggleMoving != drawnToggleMoving) { drawnToggleMoving = toggleMoving; repaint (r (kToggle).toNearestInt().expanded (3)); }
+        const bool fd = footDown();
+        if (fd != drawnFootDown) { drawnFootDown = fd; repaint (r (kFs).toNearestInt().expanded (4)); }
+        // LED : montée rapide, extinction un peu plus lente (filament froid / phosphore) ; veille AUTO = faible lueur
+        const float ledTarget = on ? 1.0f : (armed ? 0.10f : 0.0f);
+        ledLevel += (ledTarget - ledLevel) * (ledTarget > ledLevel ? 0.55f : 0.30f);
+        if (std::abs (ledLevel - ledTarget) < 0.003f) ledLevel = ledTarget;
+        if (std::abs (ledLevel - drawnLed) > 0.003f)
+        {
+            drawnLed = ledLevel;
+            repaint (r (kLedGlow).toNearestInt().expanded (2));
+            repaint (r (kFs).toNearestInt().expanded (2));
         }
         for (int i = 0; i < 3; ++i)
         {
@@ -800,7 +879,7 @@ private:
     {
         auto* ed = findParentComponentOfClass<CrycatEditor>();
         PopupMenu m;
-        const bool onFs = kFs.getCentre().getDistanceFrom (p) < kFs.getWidth() * 0.6f;
+        const bool onFs = kFsC.getDistanceFrom (p) < kFsHitR * 1.2f;
         const bool onToggle = kToggleHit.contains (p);
         if (onFs || onToggle)
         {
@@ -869,7 +948,7 @@ private:
     }
 
     CrycatProcessor& proc;
-    ScaledCache bg, fsOn, fsOff, tgL, tgR;
+    ScaledCache bg, fsUpOff, fsUpOn, fsDownOff, fsDownOn, ledGlow, tgL, tgM, tgR;
     TreadleWarp treadle;
     Typeface::Ptr typeface, typefaceBold;
     float s = kDefaultScale * kRefH / (float) kH;
@@ -877,7 +956,10 @@ private:
     Drag drag = Drag::None;
     float dragStartY = 0, dragStartVal = 0;
     int dragStartRange = 0;
-    bool pressed = false;
+    bool pressed = false, selfToggle = false, drawnStarted = false, drawnToggleMoving = false, drawnFootDown = false;
+    double footDownUntil = 0.0, toggleMidUntil = 0.0;
+    float ledLevel = 0.0f, drawnLed = -1.0f;
+    int drawnActiveP = -1;
 
     float drawnPedal = -1.0f, drawnSmall[3] = { -1.0f, -1.0f, -1.0f };
     int drawnRange = -1;

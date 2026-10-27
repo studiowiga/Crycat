@@ -6,7 +6,7 @@ if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
 endif()
 
-project(Crycat VERSION 1.2.0)
+project(Crycat VERSION 1.3.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,7 +29,7 @@ endif()
 # visuel de la pédale intégré au plugin (aucun fichier externe à l'exécution)
 juce_add_binary_data(CrycatAssets SOURCES
   background.png treadle_down.png
-  fs_on.png fs_off.png toggle_l.png toggle_r.png
+  fs_up_off.png fs_up_on.png fs_down_off.png fs_down_on.png led_glow.png toggle_l.png toggle_m.png toggle_r.png
   fonts/Poppins-Medium.ttf fonts/Poppins-Bold.ttf)
 
 if(APPLE)
@@ -47,7 +47,7 @@ juce_add_plugin(Crycat
   AU_MAIN_TYPE kAudioUnitType_MusicEffect
   VST3_CATEGORIES Fx Filter
   PRODUCT_NAME "Crycat"
-  VERSION 1.2.0
+  VERSION 1.3.0
   DESCRIPTION "Inductor wah pedal (Cry Baby-style) - double pedal format"
   IS_SYNTH FALSE
   NEEDS_MIDI_INPUT TRUE

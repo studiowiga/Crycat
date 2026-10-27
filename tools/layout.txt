@@ -16,6 +16,4 @@ purr 672.9 520.9
 boost 783.2 523.1
 smallR 40.7 smallCap 29.9
 screen 656.0 199.2 196.7 226.2
-fs 615.7 668.6 108.1
-led 772.4 724.8
-toggle 759.4 107.4 72.0 44.7
+footswitch / inverseur / LED : voir tools/controls_layout.txt
