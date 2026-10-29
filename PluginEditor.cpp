@@ -46,21 +46,20 @@ namespace
 
     Image loadPng (const void* d, int n) { return ImageFileFormat::loadFrom (d, (size_t) n).convertedToFormat (Image::ARGB); }
 
-    // redimensionne une fois, puis garde en cache tant que la taille ne change pas
+    // redimensionne une fois (par le timer, jamais dans paint), puis garde en cache tant que la taille ne change pas
     struct ScaledCache
     {
         Image src, img; float scale = -1.0f;
-        const Image& get (float s)       // s = pixels écran par unité du repère
+        void prepare (float s)           // s = pixels écran par unité du repère
         {
-            if (std::abs (s - scale) > 1.0e-4f || ! img.isValid())
-            {
-                scale = s;
-                const float k = s / kAsset;
-                const int w = jmax (1, roundToInt ((float) src.getWidth() * k)), h = jmax (1, roundToInt ((float) src.getHeight() * k));
-                img = src.rescaled (w, h, Graphics::highResamplingQuality);
-            }
-            return img;
+            if (std::abs (s - scale) <= 1.0e-4f && img.isValid()) return;
+            scale = s;
+            const float k = s / kAsset;
+            const int w = jmax (1, roundToInt ((float) src.getWidth() * k)), h = jmax (1, roundToInt ((float) src.getHeight() * k));
+            img = src.rescaled (w, h, Graphics::highResamplingQuality);
         }
+        // anti-gel v2 : le cache s'il existe, sinon l'image d'origine en attendant le timer
+        const Image& get() const { return img.isValid() ? img : src; }
     };
 
     //==========================================================================
@@ -130,25 +129,32 @@ namespace
             const int bw = jmax (1, roundToInt (box.getWidth() * s)), bh = jmax (1, roundToInt (box.getHeight() * s));
             src = down.getClippedImage ((box * kAsset).getSmallestIntegerContainer()).rescaled (bw, bh, Graphics::highResamplingQuality)
                       .convertedToFormat (Image::ARGB);
-            for (auto& f : frames) f = {};
+            // anti-gel v2 : les anciennes positions restent affichables en attendant les nouvelles (pas de saut visuel)
+            for (size_t i = 0; i < frames.size(); ++i) { if (frames[i].isValid()) oldFrames[i] = frames[i]; frames[i] = {}; }
         }
 
         // t = 0 : orteil levé (talon enfoncé), t = 1 : orteil enfoncé
-        // Anti-gel : le dessin n'utilise que des positions déjà calculées (la plus proche si besoin) ;
-        // seules les toutes premières positions sont calculées dans paint, le reste par le timer.
-        const Image& frame (int i)
+        // Anti-gel v2 : le dessin n'utilise que des positions déjà calculées (la plus proche, ou celle de l'ancienne
+        // taille) ; aucune n'est calculée dans paint. Renvoie nullptr si rien n'est encore prêt.
+        const Image* frame (int i) const
         {
             i = jlimit (0, kFrames - 1, i);
-            if (frames[(size_t) i].isValid()) return frames[(size_t) i];
-            for (int d = 1; d < kFrames; ++d)
-            {
-                if (i - d >= 0 && frames[(size_t) (i - d)].isValid()) return frames[(size_t) (i - d)];
-                if (i + d < kFrames && frames[(size_t) (i + d)].isValid()) return frames[(size_t) (i + d)];
-            }
-            frames[(size_t) i] = build ((float) i / (float) (kFrames - 1));
-            return frames[(size_t) i];
+            for (auto* set : { &frames, &oldFrames })
+                for (int d = 0; d < kFrames; ++d)
+                {
+                    if (i - d >= 0 && (*set)[(size_t) (i - d)].isValid()) return &(*set)[(size_t) (i - d)];
+                    if (i + d < kFrames && (*set)[(size_t) (i + d)].isValid()) return &(*set)[(size_t) (i + d)];
+                }
+            return nullptr;
         }
         bool isReady (int i) const { return frames[(size_t) jlimit (0, kFrames - 1, i)].isValid(); }
+        // en attendant la première position : le calque d'origine (orteil enfoncé), sans calcul
+        void drawOriginal (Graphics& g, Rectangle<float> dest) const
+        {
+            const auto sr = (box * kAsset).getSmallestIntegerContainer();
+            g.drawImage (down, roundToInt (dest.getX()), roundToInt (dest.getY()), roundToInt (dest.getWidth()), roundToInt (dest.getHeight()),
+                         sr.getX(), sr.getY(), sr.getWidth(), sr.getHeight());
+        }
 
         // calcule à l'avance une position manquante, en partant de la position actuelle (appelé par le timer)
         bool buildNextMissing (int around)
@@ -159,6 +165,7 @@ namespace
                 for (int i : { around - d, around + d })
                     if (i >= 0 && i < kFrames && ! frames[(size_t) i].isValid())
                     { frames[(size_t) i] = build ((float) i / (float) (kFrames - 1)); return true; }
+            for (auto& f : oldFrames) f = {};      // toutes les positions sont prêtes : on libère les anciennes
             return false;
         }
 
@@ -401,7 +408,7 @@ namespace
         Image down, src;
         Rectangle<float> box { 0, 0, (float) kW, (float) kH };
         float scale = -1.0f;
-        std::array<Image, kFrames> frames;
+        std::array<Image, kFrames> frames, oldFrames;
     };
 
     //==========================================================================
@@ -445,22 +452,40 @@ public:
         startTimerHz (30);
     }
 
-    void resized() override { s = (float) getWidth() / (float) kW; repaint(); }
+    // anti-gel v2 : jamais de calcul lourd ici, les caches seront refaits par le timer quand la taille sera stable
+    void resized() override { s = (float) getWidth() / (float) kW; resizeSettle = 4; repaint(); }
+
+    // caches d'images à la taille réelle en pixels (fenêtre x échelle Windows / Retina) : appelé par le timer
+    // (et une fois à l'ouverture de la fenêtre), jamais par paint
+    void rebuildCaches()
+    {
+        if (getWidth() <= 0) return;
+        const float ps = s * dispScale;
+        for (auto* c : { &bg, &fsOff, &fsOn, &ledGlow, &tgL, &tgM, &tgR }) c->prepare (ps);
+        treadle.prepare (ps);
+        askRepaint (getLocalBounds());
+    }
 
     void paint (Graphics& g) override
     {
-        const float ps = s * physScale();
-        g.drawImage (bg.get (ps), getLocalBounds().toFloat());
+        // anti-gel v2 : aucun rescale ni calcul de cache ici, on dessine les caches existants (ou les originaux)
+        lastPaintMs = Time::getMillisecondCounterHiRes();
+        repaintAskedMs = 0.0;
+        g.fillAll (Colours::black);
+        g.drawImage (bg.get(), getLocalBounds().toFloat());
 
         // ---- plateau (deux positions voisines fondues -> mouvement continu) : talon = pointe levée ----
-        treadle.prepare (ps);
         const float fpos = jlimit (0.0f, 1.0f, drawnPedal) * (float) (kFrames - 1);
         const int f0 = jlimit (0, kFrames - 1, (int) std::floor (fpos)), f1 = jmin (kFrames - 1, f0 + 1);
         const float fr = fpos - (float) f0;
         const auto tb = r (treadle.designBounds());
         g.setOpacity (1.0f);
-        g.drawImage (treadle.frame (f0), tb);
-        if (fr > 0.02f && f1 != f0) { g.setOpacity (fr); g.drawImage (treadle.frame (f1), tb); g.setOpacity (1.0f); }
+        if (auto* im0 = treadle.frame (f0))
+        {
+            g.drawImage (*im0, tb);
+            if (fr > 0.02f && f1 != f0) if (auto* im1 = treadle.frame (f1)) { g.setOpacity (fr); g.drawImage (*im1, tb); g.setOpacity (1.0f); }
+        }
+        else treadle.drawOriginal (g, tb);
 
         // ---- sélecteur RANGE : repère gravé + numéro choisi éclairé en ambre ----
         {
@@ -481,22 +506,22 @@ public:
         // ---- inverseur MAN / AUTO : position intermédiaire affichée brièvement pendant la bascule ----
         {
             const bool moving = Time::getMillisecondCounterHiRes() < toggleMidUntil;
-            g.drawImage ((moving ? tgM : (drawnAuto ? tgR : tgL)).get (ps), r (kToggle));
+            g.drawImage ((moving ? tgM : (drawnAuto ? tgR : tgL)).get(), r (kToggle));
         }
 
         // ---- LED ambre : la façade prend la lumière (calque photo), puis footswitch, puis la LED elle-même ----
         if (ledLevel > 0.003f)
         {
             g.setOpacity (jmin (1.0f, ledLevel));
-            g.drawImage (ledGlow.get (ps), r (kLedGlow));
+            g.drawImage (ledGlow.get(), r (kLedGlow));
             g.setOpacity (1.0f);
         }
         {
-            g.drawImage (fsOff.get (ps), r (kFs));
+            g.drawImage (fsOff.get(), r (kFs));
             if (ledLevel > 0.003f)    // flanc de l'écrou tourné vers la LED : reflet ambre
             {
                 g.setOpacity (jmin (1.0f, ledLevel));
-                g.drawImage (fsOn.get (ps), r (kFs));
+                g.drawImage (fsOn.get(), r (kFs));
                 g.setOpacity (1.0f);
             }
             if (pressed)              // comme Echoflex : le bouton s'assombrit tant qu'on appuie
@@ -596,10 +621,13 @@ private:
 
     Rectangle<float> r (Rectangle<float> d) const { return d * s; }
     Point<float> r (Point<float> d) const { return d * s; }
-    float physScale() const
+    float physScale() const { return jlimit (1.0f, 4.0f, (float) Component::getApproximateScaleFactorForComponent (this)); }
+
+    // anti-gel v2 : chaque redessin demandé par le timer est noté pour le chien de garde
+    void askRepaint (Rectangle<int> area)
     {
-        if (auto* d = Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds())) return jmax (1.0f, (float) d->scale);
-        return 1.0f;
+        if (repaintAskedMs <= 0.0) repaintAskedMs = Time::getMillisecondCounterHiRes();
+        repaint (area);
     }
     int currentRange() const { return jlimit (0, crycat::kNumRanges - 1, (int) std::lround (proc.apvts.getRawParameterValue ("range")->load())); }
     bool param (const char* id) const { return proc.apvts.getRawParameterValue (id)->load() > 0.5f; }
@@ -784,17 +812,36 @@ private:
 
     void timerCallback() override
     {
-        if (auto* ed = findParentComponentOfClass<CrycatEditor>()) ed->useSoftwareRenderer();
-        proc.pollCalibration();
-        // anti-gel : positions du plateau précalculées au fil des ticks (budget de quelques ms), jamais en masse dans paint
-        if (getWidth() > 0)
+        const double now = Time::getMillisecondCounterHiRes();
+        auto* ed = findParentComponentOfClass<CrycatEditor>();
+        if (ed != nullptr) ed->checkRenderer();          // fenêtre hôte recréée, ou au plus 1 fois par seconde
+
+        // caches : refaits ici seulement (jamais dans paint), après stabilisation de la taille ou changement d'échelle
+        if (resizeSettle > 0 && --resizeSettle == 0) rebuildCaches();
+        else if (resizeSettle == 0 && now - lastScaleCheckMs > 250.0)
         {
-            treadle.prepare (s * physScale());
+            lastScaleCheckMs = now;
+            const float sc = physScale();
+            if (std::abs (sc - dispScale) > 0.01f) { dispScale = sc; rebuildCaches(); }
+        }
+
+        // chien de garde : un redessin demandé n'arrive pas -> on relance le moteur de rendu et on redessine tout
+        if (repaintAskedMs > 0.0 && isShowing() && now - repaintAskedMs > 1500.0 && lastPaintMs < repaintAskedMs)
+        {
+            repaintAskedMs = 0.0;
+            if (ed != nullptr) ed->resetRenderer();
+            repaint();
+        }
+
+        proc.pollCalibration();
+        // anti-gel : positions du plateau précalculées au fil des ticks (budget de quelques ms), jamais dans paint
+        if (getWidth() > 0 && resizeSettle == 0)
+        {
             const int cur = roundToInt (jlimit (0.0f, 1.0f, proc.getPedalShown()) * (float) (kFrames - 1));
             const double t0 = Time::getMillisecondCounterHiRes();
             bool built = false;
             while (Time::getMillisecondCounterHiRes() - t0 < 6.0 && treadle.buildNextMissing (cur)) built = true;
-            if (built) repaint (r (treadle.designBounds()).toNearestInt().expanded (2));
+            if (built) askRepaint (r (treadle.designBounds()).toNearestInt().expanded (2));
         }
 
         const int rg = currentRange();
@@ -806,12 +853,12 @@ private:
         if (std::abs (ped - drawnPedal) > 0.002f)
         {
             drawnPedal = ped; screen = true;
-            repaint (r (treadle.designBounds()).toNearestInt().expanded (2));
+            askRepaint (r (treadle.designBounds()).toNearestInt().expanded (2));
         }
         if (rg != drawnRange)
         {
             const float h = kKnobR + 32.0f;
-            repaint (r (Rectangle<float> (kKnob.x - h, kKnob.y - h, 2 * h, 2 * h)).toNearestInt().expanded (2));
+            askRepaint (r (Rectangle<float> (kKnob.x - h, kKnob.y - h, 2 * h, 2 * h)).toNearestInt().expanded (2));
             drawnRange = rg; screen = true;
         }
         const double nowMs = Time::getMillisecondCounterHiRes();
@@ -819,11 +866,11 @@ private:
         if (autoM != drawnAuto || on != drawnOn || armed != drawnArmed)
         {
             drawnAuto = autoM; drawnOn = on; drawnArmed = armed; screen = true;
-            repaint (r (kToggle).toNearestInt().expanded (3));
+            askRepaint (r (kToggle).toNearestInt().expanded (3));
         }
         drawnStarted = true;
         const bool toggleMoving = nowMs < toggleMidUntil;
-        if (toggleMoving != drawnToggleMoving) { drawnToggleMoving = toggleMoving; repaint (r (kToggle).toNearestInt().expanded (3)); }
+        if (toggleMoving != drawnToggleMoving) { drawnToggleMoving = toggleMoving; askRepaint (r (kToggle).toNearestInt().expanded (3)); }
         // LED (comme Echoflex) : allumage / extinction en fondu (0.45 / 0.28 par image) ; veille AUTO = faible lueur
         const float ledTarget = on ? 1.0f : (armed ? 0.10f : 0.0f);
         ledLevel += (ledTarget - ledLevel) * (ledTarget > ledLevel ? 0.45f : 0.28f);
@@ -831,8 +878,8 @@ private:
         if (std::abs (ledLevel - drawnLed) > 0.003f)
         {
             drawnLed = ledLevel;
-            repaint (r (kLedGlow).toNearestInt().expanded (2));
-            repaint (r (kFs).toNearestInt().expanded (2));
+            askRepaint (r (kLedGlow).toNearestInt().expanded (2));
+            askRepaint (r (kFs).toNearestInt().expanded (2));
         }
         for (int i = 0; i < 3; ++i)
         {
@@ -840,11 +887,11 @@ private:
             if (std::abs (v - drawnSmall[i]) > 0.002f)
             {
                 drawnSmall[i] = v; screen = true;      // Q et BOOST changent la courbe
-                repaint (r (Rectangle<float> (kSmall[i].x - kSmallR, kSmall[i].y - kSmallR, 2 * kSmallR, 2 * kSmallR)).toNearestInt().expanded (2));
+                askRepaint (r (Rectangle<float> (kSmall[i].x - kSmallR, kSmall[i].y - kSmallR, 2 * kSmallR, 2 * kSmallR)).toNearestInt().expanded (2));
             }
         }
         if (st != drawnStatus) { drawnStatus = st; screen = true; }
-        if (screen) repaint (r (kScreen).toNearestInt().expanded (2));
+        if (screen) askRepaint (r (kScreen).toNearestInt().expanded (2));
     }
     Rectangle<int> ledArea (Point<float> c) const { const float h = kLedR * 4.0f; return r (Rectangle<float> (c.x - h, c.y - h, 2 * h, 2 * h)).toNearestInt().expanded (1); }
 
@@ -944,6 +991,14 @@ private:
     Typeface::Ptr typeface, typefaceBold;
     float s = kDefaultScale * kRefH / (float) kH;
 
+    // anti-gel v2 : échelle d'affichage, stabilisation après redimensionnement, suivi des redessins
+    float dispScale = 1.0f;
+    int resizeSettle = 0;
+    double lastPaintMs = 0.0, repaintAskedMs = 0.0, lastScaleCheckMs = 0.0;
+public:
+    void initCaches() { dispScale = physScale(); resizeSettle = 0; rebuildCaches(); }
+private:
+
     Drag drag = Drag::None;
     float dragStartY = 0, dragStartVal = 0;
     int dragStartRange = 0;
@@ -967,17 +1022,32 @@ CrycatEditor::CrycatEditor (CrycatProcessor& p) : AudioProcessorEditor (&p), pro
     const int maxH = 1120;
     setResizeLimits ((int) std::lround ((double) minH * kW / kH), minH, (int) std::lround ((double) maxH * kW / kH), maxH);
     getConstrainer()->setFixedAspectRatio ((double) kW / (double) kH);
+    setOpaque (true);                    // anti-gel : l'hôte ne redessine jamais ce qui est derrière la fenêtre
     setScaleIndex (jlimit (-1, 2, proc.uiScaleIdx.load()));
+    view->initCaches();
 }
 
 CrycatEditor::~CrycatEditor() = default;
 
+//==============================================================================
 // Anti-gel de la fenêtre (Windows) : JUCE 8 dessine par défaut avec Direct2D ; avec certains pilotes (Intel)
 // la fenêtre cesse de se rafraîchir alors que le DAW continue. Le moteur logiciel est stable partout.
+//==============================================================================
+// Anti-gel v2 (Studio Wiga) :
+//  1. moteur de rendu logiciel forcé sur Windows (Direct2D peut figer la fenêtre dans certains hôtes),
+//     appliqué à chaque nouvelle fenêtre hôte (peer) et revérifié toutes les secondes, jamais en boucle ;
+//  2. aucun calcul lourd dans paint() : les caches d'images (fond, commandes, positions du plateau) sont refaits
+//     par le timer seulement, après stabilisation de la taille ou quand l'échelle d'affichage change (au plus toutes les 250 ms) ;
+//  3. chien de garde : si un redessin demandé n'est pas arrivé au bout de 1,5 s alors que la fenêtre est
+//     visible, le moteur de rendu est réappliqué et toute la fenêtre est redessinée ;
+//  4. côté audio : aucun appel à l'hôte ni allocation depuis le thread audio (voir PluginProcessor).
 void CrycatEditor::useSoftwareRenderer()
 {
+    auto* peer = getPeer();
+    if ((void*) peer != lastPeer) { lastPeer = (void*) peer; repaint(); }
+    lastRendererCheckMs = Time::getMillisecondCounterHiRes();
    #if JUCE_WINDOWS
-    if (auto* peer = getPeer())
+    if (peer != nullptr)
     {
         int sw = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
         if (sw < 0) sw = 0;
@@ -987,7 +1057,22 @@ void CrycatEditor::useSoftwareRenderer()
    #endif
 }
 
+void CrycatEditor::checkRenderer()
+{
+    if ((void*) getPeer() != lastPeer || Time::getMillisecondCounterHiRes() - lastRendererCheckMs > 1000.0)
+        useSoftwareRenderer();
+}
+
+void CrycatEditor::resetRenderer()
+{
+    lastPeer = nullptr;
+    useSoftwareRenderer();
+    repaint();
+}
+
+void CrycatEditor::paint (Graphics& g) { g.fillAll (Colours::black); }   // la pédale recouvre tout ; fenêtre opaque
 void CrycatEditor::parentHierarchyChanged() { useSoftwareRenderer(); }
+void CrycatEditor::visibilityChanged()      { useSoftwareRenderer(); if (isShowing()) repaint(); }
 
 void CrycatEditor::resized()
 {

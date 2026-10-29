@@ -71,12 +71,14 @@ CrycatProcessor::CrycatProcessor()
     pLatch   = apvts.getRawParameterValue ("latch");
     apvts.addParameterListener ("pedal", this);
     pedalLive = pPedal->load();
+    for (int i = 0; i < numQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; }
+    startTimerHz (60);   // anti-gel v2 : aucun appel à l'hôte depuis le thread audio
 }
 
 CrycatProcessor::~CrycatProcessor()
 {
+    stopTimer();
     apvts.removeParameterListener ("pedal", this);
-    cancelPendingUpdate();
 }
 
 bool CrycatProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -90,22 +92,22 @@ bool CrycatProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 crycat::Settings CrycatProcessor::currentSettings() const
 {
     crycat::Settings s;
-    s.rangeIdx  = jlimit (0, crycat::kNumRanges - 1, (int) std::lround (pRange->load()));
+    s.rangeIdx  = jlimit (0, crycat::kNumRanges - 1, (int) std::lround (pRange->load (std::memory_order_relaxed)));
     s.pedal     = jlimit (0.0f, 1.0f, pedalLive.load());
-    s.q         = pQ->load();
-    s.purr      = pPurr->load();
-    s.boost     = pBoost->load();
-    s.active    = pActive->load() > 0.5f;
-    s.autoMode  = pAuto->load() > 0.5f;
-    s.smoothMs  = pSmooth->load();
-    s.autoOffMs = pAutoOff->load();
+    s.q         = pQ->load (std::memory_order_relaxed);
+    s.purr      = pPurr->load (std::memory_order_relaxed);
+    s.boost     = pBoost->load (std::memory_order_relaxed);
+    s.active    = pActive->load (std::memory_order_relaxed) > 0.5f;
+    s.autoMode  = pAuto->load (std::memory_order_relaxed) > 0.5f;
+    s.smoothMs  = pSmooth->load (std::memory_order_relaxed);
+    s.autoOffMs = pAutoOff->load (std::memory_order_relaxed);
     return s;
 }
 
 bool CrycatProcessor::isEffectOn() const
 {
-    if (pActive->load() < 0.5f) return false;
-    if (pAuto->load() < 0.5f) return true;
+    if (pActive->load (std::memory_order_relaxed) < 0.5f) return false;
+    if (pAuto->load (std::memory_order_relaxed) < 0.5f) return true;
     // audio arrêté : on montre ce que ferait l'enclenchement automatique
     if (Time::getMillisecondCounter() - lastBlockMs.load() > 250u) return pedalLive.load() > 0.035f;
     return engagedShown.load();
@@ -134,14 +136,14 @@ float CrycatProcessor::mapPedal (float raw, bool fromMidi) const
     float v = raw;
     if (fromMidi)
     {
-        float lo = pHeel->load(), hi = pToe->load();
+        float lo = pHeel->load (std::memory_order_relaxed), hi = pToe->load (std::memory_order_relaxed);
         const bool manual = lo > 0.001f || hi < 0.999f;
         if (! manual && autoMax.load() - autoMin.load() > 0.4f) { lo = autoMin.load(); hi = autoMax.load(); }
         v = hi > lo + 0.01f ? (raw - lo) / (hi - lo) : raw;
     }
     constexpr float dz = 0.02f;
     v = jlimit (0.0f, 1.0f, (v - dz) / (1.0f - 2.0f * dz));
-    return (fromMidi && pInvert->load() > 0.5f) ? 1.0f - v : v;
+    return (fromMidi && pInvert->load (std::memory_order_relaxed) > 0.5f) ? 1.0f - v : v;
 }
 
 void CrycatProcessor::resetCalibration()
@@ -153,7 +155,7 @@ void CrycatProcessor::resetCalibration()
 
 String CrycatProcessor::calibrationDescription() const
 {
-    const float lo = pHeel->load(), hi = pToe->load();
+    const float lo = pHeel->load (std::memory_order_relaxed), hi = pToe->load (std::memory_order_relaxed);
     auto cc = [] (float v) { return String (roundToInt (v * 127.0f)); };
     if (lo > 0.001f || hi < 0.999f) return "calibrated " + cc (lo) + " - " + cc (hi);
     if (autoMax.load() - autoMin.load() > 0.4f) return "auto " + cc (autoMin.load()) + " - " + cc (autoMax.load());
@@ -175,7 +177,7 @@ void CrycatProcessor::handleMidiMessage (const MidiMessage& m)
         return;
     }
 
-    const bool latch = pLatch->load() > 0.5f;
+    const bool latch = pLatch->load (std::memory_order_relaxed) > 0.5f;
     if (m.isController())
     {
         const int c = m.getControllerNumber(), v = m.getControllerValue();
@@ -199,25 +201,26 @@ void CrycatProcessor::handleMidiMessage (const MidiMessage& m)
         }
         const bool on = v >= 64;
         // footswitch MIDI : momentané (bascule à chaque appui) ou à accrochage (127 = ON, 0 = OFF)
-        auto handle = [&] (std::atomic<bool>& held, std::atomic<bool>& toggle, std::atomic<int>& direct)
+        // anti-gel v2 : la valeur part dans la file (bascule = valeur en file si elle existe, sinon valeur courante)
+        auto handle = [&] (std::atomic<bool>& held, int qi)
         {
-            if (latch) { direct = on ? 1 : 0; triggerAsyncUpdate(); }
-            else if (on && ! held.load()) { toggle = true; triggerAsyncUpdate(); }
+            if (latch) setParamFromAudio (qi, on ? 1.0f : 0.0f);
+            else if (on && ! held.load()) setParamFromAudio (qi, queuedOrCurrent (qi) > 0.5f ? 0.0f : 1.0f);
             held = on;
         };
-        if (c == ccAuto.load()) handle (autoHeld, pendingToggleAuto, pendingAuto);
-        if (c == ccFs.load())   handle (fsHeld, pendingToggleFs, pendingActive);
+        if (c == ccAuto.load()) handle (autoHeld, 1);
+        if (c == ccFs.load())   handle (fsHeld, 0);
     }
     else if (m.isNoteOn())
     {
-        if (m.getNoteNumber() == noteAuto.load()) { pendingToggleAuto = true; triggerAsyncUpdate(); }
-        if (m.getNoteNumber() == noteFs.load())   { pendingToggleFs = true;   triggerAsyncUpdate(); }
+        if (m.getNoteNumber() == noteAuto.load()) setParamFromAudio (1, queuedOrCurrent (1) > 0.5f ? 0.0f : 1.0f);
+        if (m.getNoteNumber() == noteFs.load())   setParamFromAudio (0, queuedOrCurrent (0) > 0.5f ? 0.0f : 1.0f);
     }
-    else if (m.isProgramChange() && pPC->load() > 0.5f)
+    else if (m.isProgramChange() && pPC->load (std::memory_order_relaxed) > 0.5f)
     {
         // PC 1 à 10 (valeurs 0 à 9) = presets usine : compatible avec le mode « Program Change » de la M-Vave Chocolate
         const int pc = m.getProgramChangeNumber();
-        if (pc < kNumFactory) { pendingFactory = pc; triggerAsyncUpdate(); }
+        if (pc < kNumFactory) pendingFactory = pc;     // appliqué par le timer du processeur
     }
 }
 
@@ -265,9 +268,31 @@ crycat::Settings CrycatProcessor::settingsAt (int offset)
 }
 
 // fin de la calibration (6 s) : appliquée sur le thread de la fenêtre (appelé par l'audio et par la fenêtre)
+// anti-gel v2 : simple drapeau, lu par le timer du processeur (plus de triggerAsyncUpdate depuis l'audio)
 void CrycatProcessor::pollCalibration()
 {
-    if (calibUntil.load() != 0 && ! isCalibrating() && ! calibPending.exchange (true)) triggerAsyncUpdate();
+    if (calibUntil.load() != 0 && ! isCalibrating()) calibPending = true;
+}
+
+// Anti-gel v2 (Studio Wiga) : jamais d'appel à l'hôte (setValueNotifyingHost) ni d'allocation depuis le thread audio.
+// Le MIDI met la valeur en file (pendingValue / pendingSet) ; le timer du processeur (60 Hz, thread de messages)
+// la transmet au DAW et à la fenêtre.
+const char* CrycatProcessor::queuedId (int i)
+{
+    static const char* ids[numQueued] = { "active", "auto" };
+    return ids[jlimit (0, numQueued - 1, i)];
+}
+
+void CrycatProcessor::setParamFromAudio (int i, float plain)
+{
+    pendingValue[i].store (plain, std::memory_order_relaxed);
+    pendingSet[i].store (true, std::memory_order_release);
+}
+
+float CrycatProcessor::queuedOrCurrent (int i) const
+{
+    if (pendingSet[i].load (std::memory_order_acquire)) return pendingValue[i].load (std::memory_order_relaxed);
+    return (i == 0 ? pActive : pAuto)->load (std::memory_order_relaxed);
 }
 
 // ------------------------------------------------------------------ audio
@@ -300,18 +325,15 @@ void CrycatProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midi
     pollCalibration();
 }
 
-void CrycatProcessor::handleAsyncUpdate()
+void CrycatProcessor::timerCallback()
 {
     const int f = pendingFactory.exchange (-1);
     if (f >= 0) loadFactory (f);
-    const int ac = pendingActive.exchange (-1);
-    if (ac >= 0) setParamValue ("active", (float) ac);
-    const int au = pendingAuto.exchange (-1);
-    if (au >= 0) setParamValue ("auto", (float) au);
-    if (pendingToggleAuto.exchange (false)) togglePedalSwitch ("auto");
-    if (pendingToggleFs.exchange (false))   togglePedalSwitch ("active");
+    for (int i = 0; i < numQueued; ++i)
+        if (pendingSet[i].exchange (false, std::memory_order_acquire))
+            setParamValue (queuedId (i), pendingValue[i].load (std::memory_order_relaxed));
 
-    if (calibPending.exchange (false))
+    if (calibPending.exchange (false) && calibUntil.load() != 0)
     {
         calibUntil = 0;
         const int lo = calMin.load(), hi = calMax.load();

@@ -6,7 +6,7 @@ if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
 endif()
 
-project(Crycat VERSION 1.3.0)
+project(Crycat VERSION 1.4.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,7 +21,7 @@ else()
   include(FetchContent)
   FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG 8.0.4
+    GIT_TAG 8.0.15
     GIT_SHALLOW ON)
   FetchContent_MakeAvailable(JUCE)
 endif()
@@ -47,7 +47,7 @@ juce_add_plugin(Crycat
   AU_MAIN_TYPE kAudioUnitType_MusicEffect
   VST3_CATEGORIES Fx Filter
   PRODUCT_NAME "Crycat"
-  VERSION 1.3.0
+  VERSION 1.4.0
   DESCRIPTION "Inductor wah pedal (Cry Baby-style) - double pedal format"
   IS_SYNTH FALSE
   NEEDS_MIDI_INPUT TRUE

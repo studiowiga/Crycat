@@ -17,7 +17,7 @@ struct FactoryPreset
 
 class CrycatProcessor : public juce::AudioProcessor,
                         private juce::AudioProcessorValueTreeState::Listener,
-                        private juce::AsyncUpdater
+                        private juce::Timer
 {
 public:
     CrycatProcessor();
@@ -81,7 +81,7 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void parameterChanged (const juce::String&, float) override;
-    void handleAsyncUpdate() override;
+    void timerCallback() override;          // anti-gel v2 : vide la file des changements demandés par l'audio (60 Hz)
     void handleMidiMessage (const juce::MidiMessage&);
     float mapPedal (float raw01, bool fromMidi = true) const;
     crycat::Settings settingsAt (int offsetInBlock);   // thread audio
@@ -108,8 +108,14 @@ public:
 private:
 
     // changements demandés depuis le thread audio (MIDI) et appliqués sur le thread de la fenêtre
-    std::atomic<int> pendingFactory { -1 }, pendingActive { -1 }, pendingAuto { -1 };
-    std::atomic<bool> pendingToggleAuto { false }, pendingToggleFs { false };
+    // anti-gel v2 : file de valeurs (aucun appel à l'hôte depuis l'audio), vidée par le timer du processeur
+    static constexpr int numQueued = 2;
+    static const char* queuedId (int i);              // "active", "auto"
+    void setParamFromAudio (int i, float plain);
+    float queuedOrCurrent (int i) const;
+    std::atomic<float> pendingValue[numQueued];
+    std::atomic<bool>  pendingSet[numQueued];
+    std::atomic<int> pendingFactory { -1 };
     int currentFactory = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CrycatProcessor)
