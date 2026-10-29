@@ -21,7 +21,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    runs-on: macos-latest
+    runs-on: macos-15-intel   # Mac Intel : les Mac Apple Silicon de GitHub sont saturés (binaire universel quand même)
     steps:
       - uses: actions/checkout@v5
       - name: Configure (binaire universel Intel + Apple Silicon)
