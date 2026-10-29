@@ -621,7 +621,11 @@ private:
 
     Rectangle<float> r (Rectangle<float> d) const { return d * s; }
     Point<float> r (Point<float> d) const { return d * s; }
-    float physScale() const { return jlimit (1.0f, 4.0f, (float) Component::getApproximateScaleFactorForComponent (this)); }
+    float physScale() const
+    {
+        if (auto* d = Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds())) return jmax (1.0f, (float) d->scale);
+        return 1.0f;
+    }
 
     // anti-gel v2 : chaque redessin demandé par le timer est noté pour le chien de garde
     void askRepaint (Rectangle<int> area)
@@ -821,8 +825,9 @@ private:
         else if (resizeSettle == 0 && now - lastScaleCheckMs > 250.0)
         {
             lastScaleCheckMs = now;
-            const float sc = physScale();
-            if (std::abs (sc - dispScale) > 0.01f) { dispScale = sc; rebuildCaches(); }
+            // échelle de l'écran (Windows / Retina) ou mise à l'échelle imposée par l'hôte : caches refaits si elle change
+            const float sc = physScale(), ap = (float) Component::getApproximateScaleFactorForComponent (this);
+            if (std::abs (sc - dispScale) > 0.01f || std::abs (ap - approxScale) > 0.01f) { dispScale = sc; approxScale = ap; rebuildCaches(); }
         }
 
         // chien de garde : un redessin demandé n'arrive pas -> on relance le moteur de rendu et on redessine tout
@@ -992,11 +997,11 @@ private:
     float s = kDefaultScale * kRefH / (float) kH;
 
     // anti-gel v2 : échelle d'affichage, stabilisation après redimensionnement, suivi des redessins
-    float dispScale = 1.0f;
+    float dispScale = 1.0f, approxScale = 1.0f;
     int resizeSettle = 0;
     double lastPaintMs = 0.0, repaintAskedMs = 0.0, lastScaleCheckMs = 0.0;
 public:
-    void initCaches() { dispScale = physScale(); resizeSettle = 0; rebuildCaches(); }
+    void initCaches() { dispScale = physScale(); approxScale = (float) Component::getApproximateScaleFactorForComponent (this); resizeSettle = 0; rebuildCaches(); }
 private:
 
     Drag drag = Drag::None;
