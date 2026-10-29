@@ -44,7 +44,7 @@ AudioProcessorValueTreeState::ParameterLayout CrycatProcessor::createLayout()
                                                         NormalisableRange<float> (100.0f, 2000.0f, 0.0f, 0.5f), 400.0f, AudioParameterFloatAttributes().withLabel ("ms")));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "heel", 1 }, "Pedal Calibration Heel (min)", NormalisableRange<float> (0.0f, 1.0f), 0.0f));
     p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "toe", 1 },  "Pedal Calibration Toe (max)",  NormalisableRange<float> (0.0f, 1.0f), 1.0f));
-    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "invert", 1 }, "MIDI Pedal Invert", false));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "invert", 1 }, "MIDI Pedal Invert", true));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "pc", 1 }, "Respond to MIDI Program Change (PC 1-10 = presets)", true));
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "latch", 1 }, "MIDI Switches Latching (127 = on / 0 = off)", false));
     return { p.begin(), p.end() };

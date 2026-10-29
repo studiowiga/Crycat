@@ -15,6 +15,7 @@ au format **pédale double** (fenêtre aux hauteurs de Ring Think : 486 x 495 pa
 - Écran ambre : plage, état, courbe de réponse en direct, fréquence centrale, Q, boost, course de la pédale, ligne d'état en %
 - 10 presets usine
 
+v1.4.1 : pédale d'expression MIDI inversée par défaut (option « Invert pedal direction » cochée à l'ouverture)
 v1.4.0 : anti-gel v2 (JUCE 8.0.15, caches refaits par le timer, chien de garde, aucun appel à l'hôte depuis le thread audio)
 
 ## Visuel
