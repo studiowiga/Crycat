@@ -63,11 +63,29 @@ public:
     }
     bool  isEffectOn() const;          // footswitch ET (mode MAN ou pédale enclenchée en AUTO)
 
-    void startMidiLearn (MidiTarget t) { learnTarget = (int) t; }
-    void cancelMidiLearn() { learnTarget = 0; }
-    MidiTarget getLearnTarget() const { return (MidiTarget) learnTarget.load(); }
+    void startMidiLearn (MidiTarget t) { learnTarget = learnIndexOf (t); }
+    void cancelMidiLearn() { learnTarget = -1; }
+    MidiTarget getLearnTarget() const
+    {
+        const int lt = learnTarget.load();
+        return lt == lPedal ? MidiTarget::Pedal : lt == lAuto ? MidiTarget::AutoSwitch : lt == lFs ? MidiTarget::Footswitch : MidiTarget::None;
+    }
     void clearMidi (MidiTarget t);
     juce::String getMidiDescription (MidiTarget t) const;
+
+    // v1.5 MIDI Learn : toutes les commandes de la facade (clic droit sur la commande)
+    enum LearnType { learnContinuous, learnToggle, learnSelector, learnFootswitch };
+    struct LearnDef { const char* id; const char* name; int defaultCC; int type; int positions; };
+    enum { lPedal = 0, lRange = 1, lQ = 2, lPurr = 3, lBoost = 4, lAuto = 5, lFs = 6 };
+    static constexpr int numLearn = 7;
+    static const LearnDef& learnDef (int i);
+    static int learnIndexOf (MidiTarget t) { return t == MidiTarget::Pedal ? lPedal : t == MidiTarget::AutoSwitch ? lAuto : t == MidiTarget::Footswitch ? lFs : -1; }
+    std::atomic<int> ccMap[numLearn];            // numero de CC de chaque commande, -1 = non assigne
+    std::atomic<int> learnTarget { -1 };         // commande en attente d'un CC (-1 = pas de learn)
+    std::atomic<int> lastLearned { -1 };         // derniere commande apprise (lue et remise a -1 par la fenetre)
+    void resetMidiMap();
+    void clearLearn (int i);
+    juce::String learnAssignText (int i) const;  // "CC n", "Note n" ou "none"
 
     // calibration de la pédale d'expression : on la balaye en entier pendant 6 s
     void startCalibration();
@@ -95,7 +113,7 @@ private:
     std::atomic<float> pedalLive { 0.0f }, pedalShown { 0.0f };
     std::atomic<bool> engagedShown { true };
     std::atomic<juce::uint32> lastBlockMs { 0 }, calibUntil { 0 };
-    std::atomic<int> learnTarget { 0 }, ccPedal { 11 }, ccAuto { -1 }, noteAuto { -1 }, ccFs { -1 }, noteFs { -1 };
+    std::atomic<int> noteAuto { -1 }, noteFs { -1 };          // MAN / AUTO et footswitch : CC dans ccMap, ou note MIDI
     std::atomic<int> calMin { 128 }, calMax { -1 };
     int pedalMsb = -1, rampSamples = 0;                       // thread audio uniquement
     juce::int64 sampleClock = 0, lastPedalChange = 0;
@@ -109,8 +127,9 @@ private:
 
     // changements demandés depuis le thread audio (MIDI) et appliqués sur le thread de la fenêtre
     // anti-gel v2 : file de valeurs (aucun appel à l'hôte depuis l'audio), vidée par le timer du processeur
-    static constexpr int numQueued = 2;
-    static const char* queuedId (int i);              // "active", "auto"
+    static constexpr int numQueued = 6;
+    static const char* queuedId (int i);              // "active", "auto", "range", "q", "purr", "boost"
+    std::atomic<float>* queuedPtr[numQueued] {};
     void setParamFromAudio (int i, float plain);
     float queuedOrCurrent (int i) const;
     std::atomic<float> pendingValue[numQueued];

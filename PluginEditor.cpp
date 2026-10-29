@@ -783,7 +783,7 @@ private:
         // ligne d'état (valeurs des réglages en direct, ou consigne MIDI)
         auto stRow = area.removeFromBottom (fh * 0.07f);
         g.setFont (Font (FontOptions (typeface).withHeight (fh * 0.052f)));
-        const bool special = proc.getLearnTarget() != MidiTarget::None || proc.isCalibrating();
+        const bool special = proc.learnTarget.load() >= 0 || proc.isCalibrating() || Time::getMillisecondCounterHiRes() < learnMsgUntil;
         g.setColour (kAmber.withAlpha (special ? 1.0f : 0.72f * jmax (alpha, 0.6f)));
         g.drawFittedText (drawnStatus, stRow.toNearestInt(), Justification::centred, 1, 0.5f);
         area.removeFromBottom (fh * 0.015f);
@@ -805,10 +805,9 @@ private:
     String statusText() const
     {
         if (proc.isCalibrating()) return "CALIBRATION : sweep the pedal heel <-> toe";
-        const auto learn = proc.getLearnTarget();
-        if (learn == MidiTarget::Pedal)      return "MIDI LEARN : move your expression pedal";
-        if (learn == MidiTarget::AutoSwitch) return "MIDI LEARN : MAN / AUTO switch";
-        if (learn == MidiTarget::Footswitch) return "MIDI LEARN : ON / OFF footswitch";
+        const int lt = proc.learnTarget.load();
+        if (lt >= 0) return String ("MIDI LEARN: move a control for ") + CrycatProcessor::learnDef (lt).name;
+        if (Time::getMillisecondCounterHiRes() < learnMsgUntil) return learnMsg;      // "<Commande> = CC n" pendant 2 s
         auto pc = [this] (const char* id) { return String (roundToInt (proc.apvts.getParameter (id)->getValue() * 100.0f)) + " %"; };
         return "PEDAL " + String (roundToInt (proc.getPedalShown() * 100.0f)) + " %"
              + "  ·  Q " + pc ("q") + "  ·  PURR " + pc ("purr") + "  ·  BOOST " + pc ("boost");
@@ -847,6 +846,14 @@ private:
             bool built = false;
             while (Time::getMillisecondCounterHiRes() - t0 < 6.0 && treadle.buildNextMissing (cur)) built = true;
             if (built) askRepaint (r (treadle.designBounds()).toNearestInt().expanded (2));
+        }
+
+        // MIDI Learn : confirmation 2 s dans la ligne d'état de l'écran
+        const int learned = proc.lastLearned.exchange (-1);
+        if (learned >= 0)
+        {
+            learnMsg = String (CrycatProcessor::learnDef (learned).name) + " = " + proc.learnAssignText (learned);
+            learnMsgUntil = Time::getMillisecondCounterHiRes() + 2000.0;
         }
 
         const int rg = currentRange();
@@ -918,20 +925,67 @@ private:
         });
     }
 
+    // commande sous la souris (même ordre de test que mouseDown) : index MIDI Learn, -1 = hors commande
+    int learnIndexAt (Point<float> p) const
+    {
+        if (kScreen.contains (p)) return -1;
+        for (int i = 0; i < crycat::kNumRanges; ++i)
+            if (p.getDistanceFrom (rangeNumberPos (i)) < 13.0f) return CrycatProcessor::lRange;
+        if (p.getDistanceFrom (kKnob) < kKnobR) return CrycatProcessor::lRange;
+        for (int i = 0; i < 3; ++i)
+            if (p.getDistanceFrom (kSmall[i]) < kSmallR * 1.15f) return CrycatProcessor::lQ + i;
+        if (kToggleHit.contains (p)) return CrycatProcessor::lAuto;
+        if (kFsC.getDistanceFrom (p) < kFsHitR * 1.2f) return CrycatProcessor::lFs;
+        if (kPlate.contains (p)) return CrycatProcessor::lPedal;
+        return -1;
+    }
+
+    // clic droit sur une commande : MIDI Learn de cette commande en tête du menu
+    void addLearnSection (PopupMenu& m, int i)
+    {
+        const String name = CrycatProcessor::learnDef (i).name;
+        const int lt = proc.learnTarget.load();
+        m.addSectionHeader (name);
+        m.addItem (1000 + i, "MIDI Learn: " + name + " (" + proc.learnAssignText (i) + ")", true, lt == i);
+        m.addItem (1100 + i, "Clear MIDI: " + name, proc.learnAssignText (i) != "none");
+        if (lt >= 0) m.addItem (1200, "Cancel MIDI learn");
+        m.addSeparator();
+    }
+
+    void addMidiSubmenu (PopupMenu& m)
+    {
+        PopupMenu midi;
+        for (int i = 0; i < CrycatProcessor::numLearn; ++i)
+            midi.addItem (1000 + i, String ("Learn: ") + CrycatProcessor::learnDef (i).name + " (" + proc.learnAssignText (i) + ")",
+                          true, proc.learnTarget.load() == i);
+        midi.addSeparator();
+        if (proc.learnTarget.load() >= 0) midi.addItem (1200, "Cancel MIDI learn");
+        midi.addItem (1201, "Reset MIDI to defaults (pedal CC 11, others none)");
+        midi.addSeparator();
+        midi.addItem (1202, "MAN / AUTO and footswitch also learn a MIDI note", false);
+        m.addSubMenu ("MIDI", midi);
+        m.addSeparator();
+    }
+
+    void handleLearnChoice (int r)
+    {
+        if (r >= 1000 && r < 1000 + CrycatProcessor::numLearn)          // re-cliquer sur la commande en attente annule
+            proc.learnTarget.store (proc.learnTarget.load() == r - 1000 ? -1 : r - 1000);
+        else if (r >= 1100 && r < 1100 + CrycatProcessor::numLearn) proc.clearLearn (r - 1100);
+        else if (r == 1200) proc.learnTarget.store (-1);
+        else if (r == 1201) proc.resetMidiMap();
+    }
+
     void showMenu (Point<float> p)
     {
         auto* ed = findParentComponentOfClass<CrycatEditor>();
         PopupMenu m;
-        const bool onFs = kFsC.getDistanceFrom (p) < kFsHitR * 1.2f;
-        const bool onToggle = kToggleHit.contains (p);
+        const int learnIdx = learnIndexAt (p);
+        if (learnIdx >= 0) addLearnSection (m, learnIdx);
+        const bool onFs = learnIdx == CrycatProcessor::lFs;
+        const bool onToggle = learnIdx == CrycatProcessor::lAuto;
         if (onFs || onToggle)
         {
-            const auto t = onToggle ? MidiTarget::AutoSwitch : MidiTarget::Footswitch;
-            const auto d = proc.getMidiDescription (t);
-            m.addSectionHeader (onToggle ? "MAN / AUTO switch" : "ON / OFF footswitch");
-            m.addItem (onToggle ? 11 : 21, "MIDI learn" + (d.isNotEmpty() ? " (now: " + d + ")" : String()));
-            m.addItem (onToggle ? 12 : 22, "Clear MIDI assignment", d.isNotEmpty());
-            m.addSeparator();
             m.addSectionHeader ("MIDI switch messages");
             m.addItem (41, "Momentary (each press toggles)", true, ! param ("latch"));
             m.addItem (42, "Latching (127 = ON, 0 = OFF)", true, param ("latch"));
@@ -957,6 +1011,7 @@ private:
             m.addSubMenu ("Switch off after resting on the heel", rel);
             m.addItem (53, "Respond to MIDI Program Change (PC 1-10)", true, param ("pc"));
             m.addSeparator();
+            if (learnIdx < 0) addMidiSubmenu (m);
         }
         m.addSectionHeader ("Plugin size");
         addSizeItems (m, ed);
@@ -967,12 +1022,9 @@ private:
             if (sp == nullptr || res == 0) return;
             auto& pr = sp->proc;
             const int glideMs[6] = { 0, 8, 15, 30, 60, 120 }, relMs[5] = { 150, 300, 400, 800, 1500 };
+            if (res >= 1000) { sp->handleLearnChoice (res); return; }
             switch (res)
             {
-                case 11: pr.startMidiLearn (MidiTarget::AutoSwitch); break;
-                case 12: pr.clearMidi (MidiTarget::AutoSwitch); break;
-                case 21: pr.startMidiLearn (MidiTarget::Footswitch); break;
-                case 22: pr.clearMidi (MidiTarget::Footswitch); break;
                 case 31: pr.startMidiLearn (MidiTarget::Pedal); break;
                 case 32: pr.clearMidi (MidiTarget::Pedal); break;
                 case 33: pr.togglePedalSwitch ("invert"); break;
@@ -1015,6 +1067,8 @@ private:
     int drawnRange = -1;
     bool drawnAuto = false, drawnOn = true, drawnArmed = false;
     String drawnStatus;
+    String learnMsg;                       // "Q = CC 21" pendant 2 s après un MIDI Learn
+    double learnMsgUntil = 0.0;
 };
 
 //==============================================================================

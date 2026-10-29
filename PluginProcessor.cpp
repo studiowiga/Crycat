@@ -22,6 +22,48 @@ const FactoryPreset& CrycatProcessor::factory (int i)
     return f[jlimit (0, kNumFactory - 1, i)];
 }
 
+// ------------------------------------------------------------------ MIDI Learn
+const CrycatProcessor::LearnDef& CrycatProcessor::learnDef (int i)
+{
+    // pedale d'expression : CC 11 par defaut (comme avant) ; les autres commandes ne sont pas assignees par defaut
+    static const LearnDef defs[numLearn] =
+    {
+        { "pedal",  "Wah pedal",           11, learnContinuous, 0 },
+        { "range",  "Range selector",      -1, learnSelector,   crycat::kNumRanges },
+        { "q",      "Q",                   -1, learnContinuous, 0 },
+        { "purr",   "Purr",                -1, learnContinuous, 0 },
+        { "boost",  "Boost",               -1, learnContinuous, 0 },
+        { "auto",   "MAN / AUTO switch",   -1, learnFootswitch, 0 },   // momentane / a accrochage, comme avant
+        { "active", "ON / OFF footswitch", -1, learnFootswitch, 0 },
+    };
+    return defs[jlimit (0, numLearn - 1, i)];
+}
+
+void CrycatProcessor::resetMidiMap()
+{
+    learnTarget = -1;
+    for (int i = 0; i < numLearn; ++i) ccMap[i].store (learnDef (i).defaultCC);
+    noteAuto = -1; noteFs = -1;
+}
+
+void CrycatProcessor::clearLearn (int i)
+{
+    if (i < 0 || i >= numLearn) return;
+    ccMap[i].store (-1);
+    if (i == lAuto) noteAuto = -1;
+    if (i == lFs)   noteFs = -1;
+    if (learnTarget.load() == i) learnTarget = -1;
+}
+
+String CrycatProcessor::learnAssignText (int i) const
+{
+    const int cc = ccMap[jlimit (0, numLearn - 1, i)].load();
+    if (cc >= 0) return "CC " + String (cc);
+    const int note = i == lAuto ? noteAuto.load() : (i == lFs ? noteFs.load() : -1);
+    if (note >= 0) return "Note " + String (note);
+    return "none";
+}
+
 // ------------------------------------------------------------------ paramètres
 AudioProcessorValueTreeState::ParameterLayout CrycatProcessor::createLayout()
 {
@@ -71,7 +113,8 @@ CrycatProcessor::CrycatProcessor()
     pLatch   = apvts.getRawParameterValue ("latch");
     apvts.addParameterListener ("pedal", this);
     pedalLive = pPedal->load();
-    for (int i = 0; i < numQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; }
+    for (int i = 0; i < numQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; queuedPtr[i] = apvts.getRawParameterValue (queuedId (i)); }
+    resetMidiMap();
     startTimerHz (60);   // anti-gel v2 : aucun appel à l'hôte depuis le thread audio
 }
 
@@ -92,11 +135,12 @@ bool CrycatProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 crycat::Settings CrycatProcessor::currentSettings() const
 {
     crycat::Settings s;
-    s.rangeIdx  = jlimit (0, crycat::kNumRanges - 1, (int) std::lround (pRange->load (std::memory_order_relaxed)));
+    // valeur MIDI encore en file (pas encore transmise par le timer) prise tout de suite ; le moteur lisse ensuite
+    s.rangeIdx  = jlimit (0, crycat::kNumRanges - 1, (int) std::lround (queuedOrCurrent (2)));
     s.pedal     = jlimit (0.0f, 1.0f, pedalLive.load());
-    s.q         = pQ->load (std::memory_order_relaxed);
-    s.purr      = pPurr->load (std::memory_order_relaxed);
-    s.boost     = pBoost->load (std::memory_order_relaxed);
+    s.q         = queuedOrCurrent (3);
+    s.purr      = queuedOrCurrent (4);
+    s.boost     = queuedOrCurrent (5);
     s.active    = pActive->load (std::memory_order_relaxed) > 0.5f;
     s.autoMode  = pAuto->load (std::memory_order_relaxed) > 0.5f;
     s.smoothMs  = pSmooth->load (std::memory_order_relaxed);
@@ -165,23 +209,40 @@ String CrycatProcessor::calibrationDescription() const
 // ------------------------------------------------------------------ MIDI
 void CrycatProcessor::handleMidiMessage (const MidiMessage& m)
 {
-    const auto learn = (MidiTarget) learnTarget.load();
-    if (learn != MidiTarget::None && ((m.isController() && m.getControllerNumber() < 120) || m.isNoteOn()))
+    // MIDI Learn : le premier CC recu (ou une note pour MAN / AUTO et le footswitch) est affecte a la commande visee
+    const int lt = learnTarget.load();
+    if (lt >= 0 && lt < numLearn)
     {
-        const int cc = m.isController() ? m.getControllerNumber() : -1;
-        const int note = m.isNoteOn() ? m.getNoteNumber() : -1;
-        if (learn == MidiTarget::Pedal)           { if (cc >= 0) ccPedal = cc; }
-        else if (learn == MidiTarget::AutoSwitch) { ccAuto = cc; noteAuto = note; autoHeld = cc >= 0 && m.getControllerValue() >= 64; }
-        else                                      { ccFs = cc; noteFs = note; fsHeld = cc >= 0 && m.getControllerValue() >= 64; }
-        if (learn != MidiTarget::Pedal || cc >= 0) learnTarget = 0;
-        return;
+        if (m.isController() && m.getControllerNumber() < 120)
+        {
+            const int cc = m.getControllerNumber();
+            const bool on = m.getControllerValue() >= 64;
+            for (int j = 0; j < numLearn; ++j)
+                if (j != lt && ccMap[j].load() == cc) ccMap[j].store (-1);   // numero deja pris : l'autre commande est desassignee
+            ccMap[lt].store (cc);
+            if (lt == lPedal) pedalMsb = -1;
+            if (lt == lAuto) { noteAuto = -1; autoHeld = on; }
+            if (lt == lFs)   { noteFs = -1;   fsHeld = on; }
+            lastLearned = lt; learnTarget = -1;
+            return;
+        }
+        if (m.isNoteOn() && (lt == lAuto || lt == lFs))
+        {
+            const int note = m.getNoteNumber();
+            if (lt == lAuto) { noteAuto = note; if (noteFs.load() == note) noteFs = -1; }
+            else             { noteFs = note;   if (noteAuto.load() == note) noteAuto = -1; }
+            ccMap[lt].store (-1);
+            lastLearned = lt; learnTarget = -1;
+            return;
+        }
     }
 
     const bool latch = pLatch->load (std::memory_order_relaxed) > 0.5f;
     if (m.isController())
     {
         const int c = m.getControllerNumber(), v = m.getControllerValue();
-        if (c == ccPedal.load())
+        const int ccPedal = ccMap[lPedal].load (std::memory_order_relaxed);
+        if (c == ccPedal)
         {
             if (isCalibrating())
             {
@@ -194,11 +255,17 @@ void CrycatProcessor::handleMidiMessage (const MidiMessage& m)
             if (raw > autoMax.load()) autoMax = raw;
             pedalLive = mapPedal (raw);
         }
-        else if (ccPedal.load() < 32 && c == ccPedal.load() + 32 && pedalMsb >= 0)
+        else if (ccPedal >= 0 && ccPedal < 32 && c == ccPedal + 32 && pedalMsb >= 0)
         {
             // contrôleur 14 bits (CC n + CC n+32) : résolution fine, si la pédale l'envoie
             pedalLive = mapPedal ((float) (pedalMsb * 128 + v) / 16383.0f);
         }
+        // sélecteur RANGE (6 positions) et potards Q / PURR / BOOST appris : 0-127 réparti sur la course
+        if (c == ccMap[lRange].load (std::memory_order_relaxed)) setParamFromAudio (2, (float) jmin (crycat::kNumRanges - 1, v * crycat::kNumRanges / 128));
+        if (c == ccMap[lQ].load (std::memory_order_relaxed))     setParamFromAudio (3, (float) v / 127.0f);
+        if (c == ccMap[lPurr].load (std::memory_order_relaxed))  setParamFromAudio (4, (float) v / 127.0f);
+        if (c == ccMap[lBoost].load (std::memory_order_relaxed)) setParamFromAudio (5, (float) v / 127.0f);
+
         const bool on = v >= 64;
         // footswitch MIDI : momentané (bascule à chaque appui) ou à accrochage (127 = ON, 0 = OFF)
         // anti-gel v2 : la valeur part dans la file (bascule = valeur en file si elle existe, sinon valeur courante)
@@ -208,8 +275,8 @@ void CrycatProcessor::handleMidiMessage (const MidiMessage& m)
             else if (on && ! held.load()) setParamFromAudio (qi, queuedOrCurrent (qi) > 0.5f ? 0.0f : 1.0f);
             held = on;
         };
-        if (c == ccAuto.load()) handle (autoHeld, 1);
-        if (c == ccFs.load())   handle (fsHeld, 0);
+        if (c == ccMap[lAuto].load (std::memory_order_relaxed)) handle (autoHeld, 1);
+        if (c == ccMap[lFs].load (std::memory_order_relaxed))   handle (fsHeld, 0);
     }
     else if (m.isNoteOn())
     {
@@ -226,20 +293,14 @@ void CrycatProcessor::handleMidiMessage (const MidiMessage& m)
 
 void CrycatProcessor::clearMidi (MidiTarget t)
 {
-    if (t == MidiTarget::Pedal)           ccPedal = 11;
-    else if (t == MidiTarget::AutoSwitch) { ccAuto = -1; noteAuto = -1; }
-    else                                  { ccFs = -1; noteFs = -1; }
-    if (getLearnTarget() == t) learnTarget = 0;
+    if (t == MidiTarget::Pedal) { ccMap[lPedal] = 11; if (learnTarget.load() == lPedal) learnTarget = -1; }   // « Reset to CC 11 »
+    else clearLearn (learnIndexOf (t));
 }
 
 String CrycatProcessor::getMidiDescription (MidiTarget t) const
 {
-    if (t == MidiTarget::Pedal) return "CC " + String (ccPedal.load());
-    const int cc = t == MidiTarget::AutoSwitch ? ccAuto.load() : ccFs.load();
-    const int note = t == MidiTarget::AutoSwitch ? noteAuto.load() : noteFs.load();
-    if (cc >= 0) return "CC " + String (cc);
-    if (note >= 0) return "Note " + String (note);
-    return {};
+    const auto d = learnAssignText (learnIndexOf (t));
+    return d == "none" ? String() : d;
 }
 
 void CrycatProcessor::startCalibration()
@@ -279,7 +340,7 @@ void CrycatProcessor::pollCalibration()
 // la transmet au DAW et à la fenêtre.
 const char* CrycatProcessor::queuedId (int i)
 {
-    static const char* ids[numQueued] = { "active", "auto" };
+    static const char* ids[numQueued] = { "active", "auto", "range", "q", "purr", "boost" };
     return ids[jlimit (0, numQueued - 1, i)];
 }
 
@@ -292,7 +353,7 @@ void CrycatProcessor::setParamFromAudio (int i, float plain)
 float CrycatProcessor::queuedOrCurrent (int i) const
 {
     if (pendingSet[i].load (std::memory_order_acquire)) return pendingValue[i].load (std::memory_order_relaxed);
-    return (i == 0 ? pActive : pAuto)->load (std::memory_order_relaxed);
+    return queuedPtr[i]->load (std::memory_order_relaxed);
 }
 
 // ------------------------------------------------------------------ audio
@@ -387,10 +448,12 @@ AudioProcessorEditor* CrycatProcessor::createEditor() { return new CrycatEditor 
 void CrycatProcessor::getStateInformation (MemoryBlock& dest)
 {
     auto st = apvts.copyState();
-    st.setProperty ("ccPedal", ccPedal.load(), nullptr);
-    st.setProperty ("ccAuto", ccAuto.load(), nullptr);
+    st.setProperty ("ccPedal", ccMap[lPedal].load(), nullptr);      // anciennes cles (projets < 1.5)
+    st.setProperty ("ccAuto", ccMap[lAuto].load(), nullptr);
     st.setProperty ("noteAuto", noteAuto.load(), nullptr);
-    st.setProperty ("ccFs", ccFs.load(), nullptr);
+    st.setProperty ("ccFs", ccMap[lFs].load(), nullptr);
+    for (int i = 0; i < numLearn; ++i)
+        st.setProperty (String ("cc_") + learnDef (i).id, ccMap[i].load(), nullptr);
     st.setProperty ("noteFs", noteFs.load(), nullptr);
     st.setProperty ("uiScaleIdx", uiScaleIdx.load(), nullptr);
     st.setProperty ("factory", currentFactory, nullptr);
@@ -406,10 +469,17 @@ void CrycatProcessor::setStateInformation (const void* data, int size)
         {
             const auto st = ValueTree::fromXml (*xml);
             apvts.replaceState (st);
-            ccPedal  = (int) st.getProperty ("ccPedal", 11);
-            ccAuto   = (int) st.getProperty ("ccAuto", -1);
+            // assignations MIDI Learn (-1 = non assigne) ; projet < 1.5 : ccPedal / ccAuto / ccFs
+            learnTarget = -1;
+            for (int i = 0; i < numLearn; ++i)
+            {
+                const var legacy = i == lPedal ? st.getProperty ("ccPedal", 11)
+                                 : i == lAuto  ? st.getProperty ("ccAuto", -1)
+                                 : i == lFs    ? st.getProperty ("ccFs", -1)
+                                               : var (learnDef (i).defaultCC);
+                ccMap[i].store (jlimit (-1, 127, (int) st.getProperty (String ("cc_") + learnDef (i).id, legacy)));
+            }
             noteAuto = (int) st.getProperty ("noteAuto", -1);
-            ccFs     = (int) st.getProperty ("ccFs", -1);
             noteFs   = (int) st.getProperty ("noteFs", -1);
             uiScaleIdx = jlimit (-1, 2, (int) st.getProperty ("uiScaleIdx", -1));
             currentFactory = jlimit (0, kNumFactory - 1, (int) st.getProperty ("factory", 0));
