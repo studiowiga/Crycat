@@ -31,3 +31,5 @@ Captures réelles de la fenêtre : `tools/render` (outil Linux, `design/renders/
 ## Build
 GitHub Actions (`.github/workflows/build.yml`) : artefacts `Crycat-VST3-Windows` et `Crycat-VST3-macOS`.
 Tests du moteur audio : `g++ -O2 -std=c++17 tests/test_dsp.cpp -o test_dsp && ./test_dsp`
+
+- v1.4.2 : menu de taille de fenêtre : « 60 % (default) », 75 %, 100 % (plus de taille en pixels)
